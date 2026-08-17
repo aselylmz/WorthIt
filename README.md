@@ -1,4 +1,4 @@
-# 🏠 Time to Afford
+# 🏠 WorthIt
 
 **Belirli bir evi veya arabayı ne zaman satın alabileceğinizi Monte Carlo simülasyonu ile tahmin edin.**
 
