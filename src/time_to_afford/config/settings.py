@@ -6,7 +6,7 @@ pydantic-settings (v2) kullanılır.
 """
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     # ── Logging ──────────────────────────────────────────────
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    # ── External Data Sources / API Keys ──────────────────────
+    evds_api_key: Optional[str] = None
 
     # ── Data Paths ───────────────────────────────────────────
     data_dir: Path = _PROJECT_ROOT / "data"

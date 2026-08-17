@@ -1,5 +1,398 @@
 """
-Data modülü testleri.
+Data modülü kapsamlı birim ve edge-case testleri.
 
-Phase 2'de implement edilecek.
+Testler tamamen offline / mockable olarak tasarlanmıştır.
 """
+
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from time_to_afford.data.loaders import (
+    DataDownloadError,
+    DataFormatError,
+    EVDSClient,
+    YahooFinanceLoader,
+    load_latest_raw_snapshot,
+    save_raw_snapshot,
+)
+from time_to_afford.data.preprocessing import (
+    align_and_compute_synthetic_gold,
+    build_macro_monthly_dataset,
+    compute_effective_deposit_rate,
+    compute_log_returns,
+    resample_rates_to_monthly,
+    resample_to_monthly_close,
+)
+from time_to_afford.data.validators import (
+    DataContractError,
+    DataIntegrityError,
+    ValidationError,
+    validate_data_contract,
+    validate_missing_values,
+    validate_numeric_bounds,
+    validate_time_series_structure,
+)
+
+
+# =====================================================================
+# 1. EVDS Client & Loader Testleri
+# =====================================================================
+
+class TestEVDSClient:
+    """TCMB EVDS API İstemcisi testleri."""
+
+    def test_init_without_key_raises(self):
+        """API anahtarı verilmediğinde açık ValueError üretilmeli."""
+        with pytest.raises(ValueError, match="API anahtarı zorunludur"):
+            EVDSClient(api_key=None)
+
+    def test_init_with_empty_key_raises(self):
+        """Boş API anahtarı hata vermeli."""
+        with pytest.raises(ValueError, match="API anahtarı zorunludur"):
+            EVDSClient(api_key="")
+
+    @patch("requests.Session.get")
+    def test_fetch_series_success(self, mock_get):
+        """Başarılı API isteğinde JSON parse edilmeli ve header doğrulanmalı."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "totalCount": 2,
+            "items": [
+                {"Tarih": "01-01-2023", "TP_FG_J0": "1203.4"},
+                {"Tarih": "01-02-2023", "TP_FG_J0": "1241.3"},
+            ],
+        }
+        mock_get.return_value = mock_response
+
+        client = EVDSClient(api_key="test_api_key")
+        df = client.fetch_series("TP.FG.J0", start_date="01-01-2023", end_date="01-02-2023")
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2
+        assert "TP_FG_J0" in df.columns
+        # Header'da key gönderildiği doğrulanmalı
+        mock_get.assert_called_once()
+        headers = mock_get.call_args[1].get("headers", {})
+        assert headers.get("key") == "test_api_key"
+
+    @patch("requests.Session.get")
+    def test_fetch_series_http_error_raises(self, mock_get):
+        """401/403/500 gibi HTTP hatalarında DataDownloadError üretilmeli."""
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_response.text = "Forbidden / Invalid Key"
+        mock_get.return_value = mock_response
+
+        client = EVDSClient(api_key="invalid_key")
+        with pytest.raises(DataDownloadError, match="HTTP 403"):
+            client.fetch_series("TP.FG.J0", start_date="01-01-2023", end_date="01-02-2023")
+
+    @patch("requests.Session.get")
+    def test_fetch_series_empty_items_raises(self, mock_get):
+        """API boş veya geçersiz liste döndüğünde DataFormatError üretilmeli."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"totalCount": 0, "items": []}
+        mock_get.return_value = mock_response
+
+        client = EVDSClient(api_key="test_key")
+        with pytest.raises(DataFormatError):
+            client.fetch_series("TP.FG.J0", start_date="01-01-2023", end_date="01-02-2023")
+
+    @patch("requests.Session.get")
+    def test_fetch_series_malformed_json_raises(self, mock_get):
+        """Bozuk JSON yanıtında DataFormatError üretilmeli."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+        mock_get.return_value = mock_response
+
+        client = EVDSClient(api_key="test_key")
+        with pytest.raises(DataFormatError, match="JSON formatı bozuk"):
+            client.fetch_series("TP.FG.J0", start_date="01-01-2023", end_date="01-02-2023")
+
+
+class TestYahooFinanceLoader:
+    """Yahoo Finance Loader testleri."""
+
+    @patch("yfinance.download")
+    def test_download_success(self, mock_yf_download):
+        """Başarılı indirmede DataFrame dönmeli."""
+        mock_df = pd.DataFrame(
+            {"Close": [5000.0, 5100.0]},
+            index=pd.to_datetime(["2023-01-02", "2023-01-03"]),
+        )
+        mock_yf_download.return_value = mock_df
+
+        loader = YahooFinanceLoader()
+        df = loader.fetch_ticker("XU100.IS", start_date="2023-01-01", end_date="2023-01-05")
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2
+        assert "close" in df.columns
+
+    @patch("yfinance.download")
+    def test_download_empty_raises(self, mock_yf_download):
+        """Boş dönen indirmede DataDownloadError üretilmeli."""
+        mock_yf_download.return_value = pd.DataFrame()
+
+        loader = YahooFinanceLoader()
+        with pytest.raises(DataDownloadError):
+            loader.fetch_ticker("INVALID_TICKER", start_date="2023-01-01", end_date="2023-01-05")
+
+
+class TestRawSnapshots:
+    """Raw snapshot immutability testleri."""
+
+    def test_save_and_load_raw_snapshot(self, tmp_path):
+        """Raw snapshot zaman damgasıyla kaydedilmeli ve okunabilmeli."""
+        df = pd.DataFrame(
+            {"value": [10.0, 20.0]},
+            index=pd.to_datetime(["2023-01-31", "2023-02-28"]),
+        )
+
+        saved_path = save_raw_snapshot(
+            df=df,
+            source="test_source",
+            series_name="test_series",
+            raw_dir=tmp_path,
+        )
+
+        assert saved_path.exists()
+        assert "test_source_test_series" in saved_path.name
+
+        loaded_df = load_latest_raw_snapshot(
+            source="test_source",
+            series_name="test_series",
+            raw_dir=tmp_path,
+        )
+        assert len(loaded_df) == 2
+        assert list(loaded_df["value"]) == [10.0, 20.0]
+
+
+# =====================================================================
+# 2. Validator Testleri
+# =====================================================================
+
+class TestValidators:
+    """Veri doğrulama ve bütünlük testleri."""
+
+    def test_validate_time_series_structure_valid(self):
+        """Geçerli yapı doğrulamadan geçmeli."""
+        df = pd.DataFrame(
+            {"val": [1.0, 2.0]},
+            index=pd.to_datetime(["2023-01-01", "2023-02-01"]),
+        )
+        validate_time_series_structure(df)
+
+    def test_validate_non_datetime_index_raises(self):
+        """Datetime olmayan indeks hata vermeli."""
+        df = pd.DataFrame({"val": [1.0, 2.0]}, index=[1, 2])
+        with pytest.raises(ValidationError, match="DatetimeIndex"):
+            validate_time_series_structure(df)
+
+    def test_validate_duplicate_dates_raises(self):
+        """Mükerrer tarih indeksi DataIntegrityError vermeli."""
+        df = pd.DataFrame(
+            {"val": [1.0, 2.0]},
+            index=pd.to_datetime(["2023-01-01", "2023-01-01"]),
+        )
+        with pytest.raises(DataIntegrityError, match="Mükerrer"):
+            validate_time_series_structure(df)
+
+    def test_validate_unsorted_dates_raises(self):
+        """Kronolojik sırada olmayan tarihler hata vermeli."""
+        df = pd.DataFrame(
+            {"val": [1.0, 2.0]},
+            index=pd.to_datetime(["2023-02-01", "2023-01-01"]),
+        )
+        with pytest.raises(DataIntegrityError, match="kronolojik"):
+            validate_time_series_structure(df)
+
+    def test_validate_future_dates_raises(self):
+        """Bugünden ileri tarih içeren veri hata vermeli."""
+        future_date = datetime.now() + timedelta(days=365)
+        df = pd.DataFrame(
+            {"val": [1.0]},
+            index=pd.to_datetime([future_date]),
+        )
+        with pytest.raises(ValidationError, match="Gelecek tarihli"):
+            validate_time_series_structure(df)
+
+    def test_validate_numeric_bounds_positive_price(self):
+        """Sıfır veya negatif fiyat ValidationError vermeli."""
+        df = pd.DataFrame(
+            {"price": [100.0, -5.0]},
+            index=pd.to_datetime(["2023-01-01", "2023-02-01"]),
+        )
+        with pytest.raises(ValidationError):
+            validate_numeric_bounds(df, column="price", allow_zero=False, allow_negative=False)
+
+    def test_validate_numeric_bounds_negative_interest_rate(self):
+        """Negatif faiz oranı ValidationError vermeli."""
+        df = pd.DataFrame(
+            {"rate": [15.0, -0.5]},
+            index=pd.to_datetime(["2023-01-01", "2023-02-01"]),
+        )
+        with pytest.raises(ValidationError):
+            validate_numeric_bounds(df, column="rate", allow_zero=True, allow_negative=False)
+
+    def test_validate_missing_values_within_active_window(self):
+        """Geçerli aralık içindeki beklenmeyen null hata vermeli."""
+        df = pd.DataFrame(
+            {"cpi": [100.0, np.nan, 105.0]},
+            index=pd.to_datetime(["2023-01-31", "2023-02-28", "2023-03-31"]),
+        )
+        with pytest.raises(DataIntegrityError):
+            validate_missing_values(df, column="cpi", start_date=pd.Timestamp("2023-01-01"))
+
+    def test_validate_missing_values_allowed_before_start_date(self):
+        """Serinin başlangıç tarihinden önceki NaN'lar hata vermemeli."""
+        # KFE örneğin 2010 öncesi NaN olabilir
+        df = pd.DataFrame(
+            {"kfe": [np.nan, np.nan, 100.0, 102.0]},
+            index=pd.to_datetime(["2008-01-31", "2009-01-31", "2010-01-31", "2010-02-28"]),
+        )
+        # 2010-01-01 öncesi eksiklik kabul edilmeli
+        validate_missing_values(df, column="kfe", start_date=pd.Timestamp("2010-01-01"))
+
+
+# =====================================================================
+# 3. Preprocessing ve Matematiksel Dönüşüm Testleri
+# =====================================================================
+
+class TestPreprocessing:
+    """Zaman serisi ön işleme ve dönüşüm testleri."""
+
+    def test_resample_to_monthly_close(self):
+        """Günlük seriden ayın son gerçekleşen kapanış günü seçilmeli."""
+        # Cuma ay sonu ise Cuma günü değeri alınmalı
+        df = pd.DataFrame(
+            {"close": [10.0, 11.0, 12.0]},
+            index=pd.to_datetime(["2023-01-29", "2023-01-30", "2023-01-31"]),
+        )
+        res = resample_to_monthly_close(df, column="close")
+        assert len(res) == 1
+        assert res.iloc[0] == 12.0
+        assert res.index[0] == pd.Timestamp("2023-01-31")
+
+    def test_resample_rates_to_monthly(self):
+        """Faiz serilerinde ilgili ayın aritmetik ortalaması alınmalı."""
+        df = pd.DataFrame(
+            {"rate": [20.0, 24.0]},
+            index=pd.to_datetime(["2023-01-10", "2023-01-20"]),
+        )
+        res = resample_rates_to_monthly(df, column="rate")
+        assert len(res) == 1
+        assert res.iloc[0] == 22.0
+
+    def test_compute_log_returns_math(self):
+        """Log-return: r_t = ln(P_t / P_{t-1}) elle hesaplanmış değerle doğrulanmalı."""
+        prices = pd.Series([100.0, 110.0, 121.0], index=pd.date_range("2023-01-31", periods=3, freq="ME"))
+        returns = compute_log_returns(prices)
+
+        assert np.isnan(returns.iloc[0])  # İlk değer NaN olmalı (leakage yok)
+        expected_r1 = np.log(110.0 / 100.0)  # ~0.095310
+        expected_r2 = np.log(121.0 / 110.0)  # ~0.095310
+        assert np.isclose(returns.iloc[1], expected_r1)
+        assert np.isclose(returns.iloc[2], expected_r2)
+
+    def test_compute_log_returns_zero_or_negative_raises(self):
+        """Sıfır veya negatif fiyatta log-return ValueError vermeli."""
+        prices = pd.Series([100.0, 0.0], index=pd.date_range("2023-01-31", periods=2, freq="ME"))
+        with pytest.raises(ValueError):
+            compute_log_returns(prices)
+
+    def test_compute_effective_deposit_rate(self):
+        """Yıllık faiz -> Aylık getiri dönüşümü: (1 + i/100)^(1/12) - 1 test edilmeli."""
+        annual_rate = 12.0  # %12 yıllık faiz
+        expected_monthly = (1.0 + 12.0 / 100.0) ** (1.0 / 12.0) - 1.0  # ~0.00948879
+        calculated = compute_effective_deposit_rate(annual_rate)
+        assert np.isclose(calculated, expected_monthly, atol=1e-7)
+
+    def test_compute_synthetic_gram_gold_math(self):
+        """Sentetik gram altın formülü: (Ons * USD/TRY) / 31.1034768 elle test edilmeli."""
+        ons_usd = 2000.0
+        usd_try = 30.0
+        expected_gram_tl = (2000.0 * 30.0) / 31.1034768  # ~1929.0448
+
+        gold_series = pd.Series([ons_usd], index=[pd.Timestamp("2023-01-31")])
+        fx_series = pd.Series([usd_try], index=[pd.Timestamp("2023-01-31")])
+
+        synthetic = align_and_compute_synthetic_gold(gold_series, fx_series)
+        assert len(synthetic) == 1
+        assert np.isclose(synthetic.iloc[0], expected_gram_tl, atol=1e-3)
+
+    def test_align_and_compute_synthetic_gold_mismatched_dates(self):
+        """Ons ve USD/TRY farklı tatil günlerine sahip olduğunda güvenli inner join yapılmalı."""
+        # 1. gün: ortak, 2. gün: sadece altın, 3. gün: sadece fx
+        gold_series = pd.Series([2000.0, 2010.0], index=pd.to_datetime(["2023-01-30", "2023-01-31"]))
+        fx_series = pd.Series([30.0, 30.5], index=pd.to_datetime(["2023-01-30", "2023-02-01"]))
+
+        synthetic = align_and_compute_synthetic_gold(gold_series, fx_series)
+        assert len(synthetic) == 1
+        assert synthetic.index[0] == pd.Timestamp("2023-01-30")
+
+
+# =====================================================================
+# 4. Pipeline Runner & Data Contract Uyum Testi
+# =====================================================================
+
+class TestMacroPipelineRunner:
+    """Nihai dataset üretim pipeline'ı ve Data Contract testleri."""
+
+    def test_build_macro_monthly_dataset_contract_compliance(self):
+        """Pipeline çıktısı Data Contract'a tam uyum sağlamalı ve salary_growth içermemelidir."""
+        dates = pd.date_range("2020-01-31", periods=12, freq="ME")
+
+        raw_data = {
+            "cpi_index": pd.Series(np.linspace(100, 150, 12), index=dates),
+            "house_price_index": pd.Series(np.linspace(200, 350, 12), index=dates),
+            "deposit_rate_3m": pd.Series(np.full(12, 25.0), index=dates),
+            "usd_try": pd.Series(np.linspace(10, 20, 12), index=dates),
+            "policy_rate": pd.Series(np.full(12, 15.0), index=dates),
+            "bist100_close": pd.Series(np.linspace(2000, 5000, 12), index=dates),
+            "gold_ons_usd": pd.Series(np.linspace(1800, 2000, 12), index=dates),
+            "vehicle_price_proxy": pd.Series(np.linspace(100, 180, 12), index=dates),
+        }
+
+        df_processed = build_macro_monthly_dataset(raw_data)
+
+        # 1. salary_growth_rate OLMAMALI (katman ayrımı kuralı)
+        assert "salary_growth_rate" not in df_processed.columns
+        assert "salary" not in str(df_processed.columns).lower()
+
+        # 2. Zorunlu sütunlar mevcut olmalı
+        expected_cols = [
+            "cpi_index", "cpi_return",
+            "house_price_index", "house_price_return",
+            "deposit_rate_3m", "deposit_monthly_return",
+            "usd_try", "usd_try_return",
+            "policy_rate",
+            "bist100_close", "bist100_return",
+            "synthetic_gram_gold_try", "gold_return",
+            "vehicle_price_proxy", "vehicle_proxy_return",
+        ]
+        for col in expected_cols:
+            assert col in df_processed.columns, f"Eksik sütun: {col}"
+
+        # 3. İndeks ME olmalı
+        assert isinstance(df_processed.index, pd.DatetimeIndex)
+
+        # 4. Data contract doğrulayıcı geçerli kabul etmeli
+        validate_data_contract(df_processed)
+
+    def test_validate_data_contract_missing_column_raises(self):
+        """Eksik sütun içeren dataframe DataContractError vermeli."""
+        df = pd.DataFrame(
+            {"cpi_index": [100.0]},
+            index=pd.to_datetime(["2023-01-31"]),
+        )
+        with pytest.raises(DataContractError, match="Eksik sütunlar"):
+            validate_data_contract(df)
