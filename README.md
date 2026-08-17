@@ -8,7 +8,7 @@
 
 ## Proje Hakkında
 
-Time to Afford, kullanıcının mevcut finansal durumundan yola çıkarak belirli
+WorthIt, kullanıcının mevcut finansal durumundan yola çıkarak belirli
 bir evi veya arabayı gelecekte yaklaşık ne zaman satın alabileceğini tahmin
 eden kişiselleştirilmiş bir **multi-series forecasting + stochastic simulation**
 uygulamasıdır.
