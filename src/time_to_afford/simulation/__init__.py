@@ -10,6 +10,15 @@ from time_to_afford.simulation.distributions import (
     cumulative_product,
 )
 from time_to_afford.simulation.monte_carlo import SimulationOutput, run_simulation
+from time_to_afford.simulation.scenarios import (
+    ScenarioParams,
+    BASELINE,
+    OPTIMISTIC,
+    PESSIMISTIC,
+    PRESETS,
+    run_scenario,
+    get_preset,
+)
 
 __all__ = [
     "LogNormalParams",
@@ -21,4 +30,11 @@ __all__ = [
     "cumulative_product",
     "SimulationOutput",
     "run_simulation",
+    "ScenarioParams",
+    "BASELINE",
+    "OPTIMISTIC",
+    "PESSIMISTIC",
+    "PRESETS",
+    "run_scenario",
+    "get_preset",
 ]
