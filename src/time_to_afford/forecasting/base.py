@@ -71,7 +71,29 @@ class BaseForecaster(ABC):
         pd.DataFrame
             'lower' ve 'upper' sütunlarını içeren DataFrame.
         """
+    @abstractmethod
+    def simulate_paths(
+        self, horizon: int, n_paths: int, random_state: int | None = None
+    ) -> np.ndarray:
+        """Belirtilen ufuk ve sayıda stokastik simülasyon patikası üretir.
 
+        Monte Carlo simülasyonu için kullanılır. Modelin kendi istatistiksel
+        dağılımını ve belirsizliğini (uncertainty) baz alır.
+
+        Parameters
+        ----------
+        horizon : int
+            Kaç adım ileri tahmin yapılacağı.
+        n_paths : int
+            Üretilecek rassal patika sayısı.
+        random_state : int | None, optional
+            Tekrarlanabilirlik için seed.
+
+        Returns
+        -------
+        np.ndarray
+            (n_paths, horizon) boyutunda numpy dizisi.
+        """
     @property
     def is_fitted(self) -> bool:
         """Modelin eğitilip eğitilmediğini döndürür."""

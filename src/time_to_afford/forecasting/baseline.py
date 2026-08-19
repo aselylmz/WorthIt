@@ -146,6 +146,22 @@ class NaiveForecaster(BaseForecaster):
             index=forecast.index,
         )
 
+    def simulate_paths(
+        self, horizon: int, n_paths: int, random_state: int | None = None
+    ) -> np.ndarray:
+        """Stokastik patikalar üretir (Random Walk)."""
+        self._check_is_fitted()
+        if horizon < 1:
+            raise ValueError(f"horizon >= 1 olmalıdır, alınan: {horizon}")
+        if n_paths < 1:
+            raise ValueError(f"n_paths >= 1 olmalıdır, alınan: {n_paths}")
+
+        rng = np.random.default_rng(random_state)
+        innovations = rng.normal(
+            loc=0.0, scale=self._residual_std, size=(n_paths, horizon)
+        )
+        return self._last_value + np.cumsum(innovations, axis=1)
+
 
 # =====================================================================
 # 2. Drift Forecaster
@@ -260,6 +276,22 @@ class DriftForecaster(BaseForecaster):
             {"lower": forecast.values - margin, "upper": forecast.values + margin},
             index=forecast.index,
         )
+
+    def simulate_paths(
+        self, horizon: int, n_paths: int, random_state: int | None = None
+    ) -> np.ndarray:
+        """Stokastik patikalar üretir (Driftli Random Walk)."""
+        self._check_is_fitted()
+        if horizon < 1:
+            raise ValueError(f"horizon >= 1 olmalıdır, alınan: {horizon}")
+        if n_paths < 1:
+            raise ValueError(f"n_paths >= 1 olmalıdır, alınan: {n_paths}")
+
+        rng = np.random.default_rng(random_state)
+        innovations = rng.normal(
+            loc=self._drift, scale=self._residual_std, size=(n_paths, horizon)
+        )
+        return self._last_value + np.cumsum(innovations, axis=1)
 
 
 # =====================================================================
@@ -385,6 +417,30 @@ class SeasonalNaiveForecaster(BaseForecaster):
             index=forecast.index,
         )
 
+    def simulate_paths(
+        self, horizon: int, n_paths: int, random_state: int | None = None
+    ) -> np.ndarray:
+        """Stokastik patikalar üretir (Sezonluk Random Walk)."""
+        self._check_is_fitted()
+        if horizon < 1:
+            raise ValueError(f"horizon >= 1 olmalıdır, alınan: {horizon}")
+        if n_paths < 1:
+            raise ValueError(f"n_paths >= 1 olmalıdır, alınan: {n_paths}")
+
+        rng = np.random.default_rng(random_state)
+        paths = np.zeros((n_paths, horizon))
+
+        last_season = np.tile(self._seasonal_values, (n_paths, 1))
+
+        for h in range(horizon):
+            season_idx = h % self._period
+            innovations = rng.normal(loc=0.0, scale=self._residual_std, size=n_paths)
+            new_val = last_season[:, season_idx] + innovations
+            paths[:, h] = new_val
+            last_season[:, season_idx] = new_val
+
+        return paths
+
 
 # =====================================================================
 # 4. Moving Average Forecaster
@@ -508,3 +564,20 @@ class MovingAverageForecaster(BaseForecaster):
             },
             index=forecast.index,
         )
+
+    def simulate_paths(
+        self, horizon: int, n_paths: int, random_state: int | None = None
+    ) -> np.ndarray:
+        """Stokastik patikalar üretir (Sabit ortalama + gürültü)."""
+        self._check_is_fitted()
+        if horizon < 1:
+            raise ValueError(f"horizon >= 1 olmalıdır, alınan: {horizon}")
+        if n_paths < 1:
+            raise ValueError(f"n_paths >= 1 olmalıdır, alınan: {n_paths}")
+
+        rng = np.random.default_rng(random_state)
+        std_scale = self._residual_std * np.sqrt(1.0 + 1.0 / self._window)
+        innovations = rng.normal(
+            loc=0.0, scale=std_scale, size=(n_paths, horizon)
+        )
+        return self._ma_value + innovations

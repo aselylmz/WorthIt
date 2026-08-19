@@ -243,6 +243,9 @@ class TestForecasting:
                     "upper": [0.0] * horizon,
                 })
 
+            def simulate_paths(self, horizon, n_paths, random_state=None):
+                return np.zeros((n_paths, horizon))
+
         fc = DummyForecaster(name="test")
         assert "test" in repr(fc)
         assert "False" in repr(fc)
@@ -269,6 +272,9 @@ class TestForecasting:
             def predict_interval(self, horizon, alpha=0.05, **kwargs):
                 self._check_is_fitted()
                 return pd.DataFrame()
+
+            def simulate_paths(self, horizon, n_paths, random_state=None):
+                return np.zeros((n_paths, horizon))
 
         fc = DummyForecaster(name="test")
         with pytest.raises(RuntimeError, match="eğitilmedi"):

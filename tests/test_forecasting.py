@@ -343,6 +343,109 @@ class TestMovingAverageForecaster:
 
 
 # =====================================================================
+# simulate_paths Testleri
+# =====================================================================
+
+class TestSimulatePaths:
+    def test_shape_and_type(self, noisy_series):
+        model = NaiveForecaster()
+        model.fit(noisy_series)
+        paths = model.simulate_paths(horizon=12, n_paths=1000, random_state=42)
+
+        assert isinstance(paths, np.ndarray)
+        assert paths.shape == (1000, 12)
+        assert np.issubdtype(paths.dtype, np.number)
+
+    def test_invalid_horizon_and_n_paths(self, constant_series):
+        model = NaiveForecaster()
+        model.fit(constant_series)
+
+        with pytest.raises(ValueError):
+            model.simulate_paths(horizon=0, n_paths=100)
+
+        with pytest.raises(ValueError):
+            model.simulate_paths(horizon=-1, n_paths=100)
+
+        with pytest.raises(ValueError):
+            model.simulate_paths(horizon=12, n_paths=0)
+
+        with pytest.raises(ValueError):
+            model.simulate_paths(horizon=12, n_paths=-1)
+
+    def test_not_fitted_raises(self):
+        model = NaiveForecaster()
+        with pytest.raises(RuntimeError):
+            model.simulate_paths(horizon=12, n_paths=100)
+
+    def test_reproducibility(self, noisy_series):
+        model = DriftForecaster()
+        model.fit(noisy_series)
+
+        paths1 = model.simulate_paths(horizon=12, n_paths=100, random_state=123)
+        paths2 = model.simulate_paths(horizon=12, n_paths=100, random_state=123)
+        paths3 = model.simulate_paths(horizon=12, n_paths=100, random_state=999)
+
+        np.testing.assert_array_equal(paths1, paths2)
+        with pytest.raises(AssertionError):
+            np.testing.assert_array_equal(paths1, paths3)
+
+    def test_law_of_large_numbers_naive(self, noisy_series):
+        model = NaiveForecaster()
+        model.fit(noisy_series)
+
+        n_paths = 10000
+        horizon = 12
+        paths = model.simulate_paths(horizon=horizon, n_paths=n_paths, random_state=42)
+        deterministic = model.predict(horizon).values
+
+        path_mean = paths.mean(axis=0)
+        # Using a reasonable statistical tolerance based on the standard error of the mean
+        std_err = (model._residual_std * np.sqrt(np.arange(1, horizon + 1))) / np.sqrt(n_paths)
+
+        assert np.allclose(path_mean, deterministic, atol=std_err.max() * 4) # 4 sigma bound
+
+    def test_law_of_large_numbers_drift(self, linear_trend_series):
+        model = DriftForecaster()
+        model.fit(linear_trend_series)
+
+        n_paths = 10000
+        horizon = 12
+        paths = model.simulate_paths(horizon=horizon, n_paths=n_paths, random_state=42)
+        deterministic = model.predict(horizon).values
+
+        path_mean = paths.mean(axis=0)
+        # Low variance for this series, tight tolerance
+        assert np.allclose(path_mean, deterministic, atol=0.5)
+
+    def test_non_degeneracy(self, noisy_series):
+        model = NaiveForecaster()
+        model.fit(noisy_series)
+        paths = model.simulate_paths(horizon=12, n_paths=100, random_state=42)
+
+        std_devs = paths.std(axis=0)
+        assert np.all(std_devs > 0)
+        # Standard deviation should roughly increase with sqrt(h)
+        assert std_devs[-1] > std_devs[0]
+
+    def test_all_baseline_models_support_simulate_paths(self, noisy_series, seasonal_series):
+        # Naive
+        naive = NaiveForecaster().fit(noisy_series)
+        assert naive.simulate_paths(5, 10).shape == (10, 5)
+
+        # Drift
+        drift = DriftForecaster().fit(noisy_series)
+        assert drift.simulate_paths(5, 10).shape == (10, 5)
+
+        # Seasonal Naive
+        s_naive = SeasonalNaiveForecaster(period=12).fit(seasonal_series)
+        assert s_naive.simulate_paths(5, 10).shape == (10, 5)
+
+        # Moving Average
+        ma = MovingAverageForecaster(window=6).fit(noisy_series)
+        assert ma.simulate_paths(5, 10).shape == (10, 5)
+
+
+# =====================================================================
 # Evaluation: Hata Metrikleri Testleri
 # =====================================================================
 
