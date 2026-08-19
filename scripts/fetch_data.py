@@ -24,11 +24,7 @@ from typing import Dict
 import pandas as pd
 
 from time_to_afford.data.loaders import EVDSClient, YahooFinanceLoader, save_raw_snapshot
-from time_to_afford.data.preprocessing import (
-    resample_rates_to_monthly,
-    resample_to_monthly_close,
-    run_data_pipeline,
-)
+from time_to_afford.data.preprocessing import run_data_pipeline
 from time_to_afford.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -74,8 +70,8 @@ DEFAULT_START = "2010-01-01"
 
 def _fetch_evds_level_series(
     client: EVDSClient, dataset_key: str, series_code: str, start: str, end: str
-) -> pd.Series:
-    """EVDS'ten bir seviye serisi çeker, raw snapshot kaydeder ve aylık kapanışa indirger."""
+) -> pd.DataFrame:
+    """EVDS'ten bir seviye serisi çeker, raw snapshot kaydeder ve raw DataFrame döner."""
     df = client.fetch_series(
         series_code,
         start_date=start,
@@ -83,13 +79,13 @@ def _fetch_evds_level_series(
     )
     column = series_code.replace(".", "_")
     save_raw_snapshot(df, source="evds", series_name=dataset_key)
-    return resample_to_monthly_close(df, column=column)
+    return df[[column]].rename(columns={column: "value"})
 
 
 def _fetch_evds_rate_series(
     client: EVDSClient, dataset_key: str, series_code: str, start: str, end: str
-) -> pd.Series:
-    """EVDS'ten bir faiz oranı serisi çeker, raw snapshot kaydeder ve aylık ortalamaya indirger."""
+) -> pd.DataFrame:
+    """EVDS'ten bir faiz oranı serisi çeker, raw snapshot kaydeder ve raw DataFrame döner."""
     df = client.fetch_series(
         series_code,
         start_date=start,
@@ -97,16 +93,16 @@ def _fetch_evds_rate_series(
     )
     column = series_code.replace(".", "_")
     save_raw_snapshot(df, source="evds", series_name=dataset_key)
-    return resample_rates_to_monthly(df, column=column)
+    return df[[column]].rename(columns={column: "value"})
 
 
 def _fetch_yahoo_series(
     loader: YahooFinanceLoader, dataset_key: str, ticker: str, start: str, end: str
-) -> pd.Series:
-    """Yahoo Finance'ten bir seri çeker, raw snapshot kaydeder ve aylık kapanışa indirger."""
+) -> pd.DataFrame:
+    """Yahoo Finance'ten bir seri çeker, raw snapshot kaydeder ve raw DataFrame döner."""
     df = loader.fetch_ticker(ticker, start_date=start, end_date=end)
     save_raw_snapshot(df, source="yfinance", series_name=dataset_key)
-    return resample_to_monthly_close(df, column="close")
+    return df[["close"]].rename(columns={"close": "value"})
 
 
 # =====================================================================
@@ -114,7 +110,7 @@ def _fetch_yahoo_series(
 # =====================================================================
 
 
-def fetch_all_raw_series(start_iso: str, end_iso: str) -> Dict[str, pd.Series]:
+def fetch_all_raw_series(start_iso: str, end_iso: str) -> Dict[str, pd.DataFrame]:
     """Tüm EVDS ve Yahoo Finance serilerini çeker ve dataset anahtarına göre sözlük döner.
 
     Parameters
@@ -126,16 +122,16 @@ def fetch_all_raw_series(start_iso: str, end_iso: str) -> Dict[str, pd.Series]:
 
     Returns
     -------
-    dict of str -> pd.Series
+    dict of str -> pd.DataFrame
         `build_macro_monthly_dataset` / `run_data_pipeline` için hazır
-        ham aylık seriler sözlüğü.
+        ham günlük/haftalık seriler sözlüğü.
     """
     start_date = date.fromisoformat(start_iso)
     end_date = date.fromisoformat(end_iso)
     evds_start = start_date.strftime("%d-%m-%Y")
     evds_end = end_date.strftime("%d-%m-%Y")
 
-    raw_series: Dict[str, pd.Series] = {}
+    raw_series: Dict[str, pd.DataFrame] = {}
 
     evds_client = EVDSClient()
     for dataset_key, series_code in EVDS_LEVEL_SERIES.items():

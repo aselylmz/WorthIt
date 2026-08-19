@@ -43,7 +43,7 @@ class EVDSClient:
     HTTP isteğinin 'key' başlığında (header) iletir.
     """
 
-    BASE_URL = "https://evds2.tcmb.gov.tr/service/evds/"
+    BASE_URL = "https://evds3.tcmb.gov.tr/igmevdsms-dis/"
 
     def __init__(self, api_key: Optional[str] = None) -> None:
         """EVDS İstemcisini başlat.
@@ -105,23 +105,25 @@ class EVDSClient:
         DataFormatError
             Yanıt formatı bozuk veya boş olduğunda.
         """
-        params: Dict[str, Any] = {
-            "series": series_code,
-            "startDate": start_date,
-            "endDate": end_date,
-            "type": "json",
-        }
+        url_path_args = [
+            f"series={series_code}",
+            f"startDate={start_date}",
+            f"endDate={end_date}",
+            "type=json",
+        ]
         if frequency is not None:
-            params["frequency"] = frequency
+            url_path_args.append(f"frequency={frequency}")
         if aggregation_type is not None:
-            params["aggregationTypes"] = aggregation_type
+            url_path_args.append(f"aggregationTypes={aggregation_type}")
+
+        full_url = self.BASE_URL + "&".join(url_path_args)
 
         headers = {"key": self.api_key}
 
         logger.info(f"EVDS API isteği gönderiliyor: series={series_code}, start={start_date}, end={end_date}")
 
         try:
-            response = self.session.get(self.BASE_URL, params=params, headers=headers, timeout=30)
+            response = self.session.get(full_url, headers=headers, timeout=30)
         except requests.RequestException as e:
             raise DataDownloadError(f"EVDS API bağlantı hatası: {e}") from e
 

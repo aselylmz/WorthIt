@@ -170,7 +170,7 @@ def align_and_compute_synthetic_gold(
 # Gözlemlenmiş Aylık Veri Seti Oluşturucu (Dataset Builder)
 # =====================================================================
 
-def build_macro_monthly_dataset(raw_series_dict: Dict[str, pd.Series]) -> pd.DataFrame:
+def build_macro_monthly_dataset(raw_series_dict: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Tüm ham aylık serileri birleştirir, deterministik dönüşümleri uygular ve doğrular.
 
     Katman İzolasyon Kuralı: Bu fonksiyon yalnızca gözlemlenmiş geçmiş verileri ve
@@ -179,7 +179,7 @@ def build_macro_monthly_dataset(raw_series_dict: Dict[str, pd.Series]) -> pd.Dat
 
     Parameters
     ----------
-    raw_series_dict : dict of str -> pd.Series
+    raw_series_dict : dict of str -> pd.DataFrame
         Ham aylık seriler sözlüğü. Beklenen anahtarlar:
         'cpi_index', 'house_price_index', 'deposit_rate_3m', 'usd_try',
         'policy_rate', 'bist100_close', 'gold_ons_usd', 'vehicle_price_proxy'.
@@ -194,20 +194,23 @@ def build_macro_monthly_dataset(raw_series_dict: Dict[str, pd.Series]) -> pd.Dat
     # Ortak tarih havuzunu oluştur
     df = pd.DataFrame(index=pd.DatetimeIndex([]))
 
-    # Seviye serilerini aktar
-    df["cpi_index"] = raw_series_dict["cpi_index"]
-    df["house_price_index"] = raw_series_dict["house_price_index"]
-    df["deposit_rate_3m"] = raw_series_dict["deposit_rate_3m"]
-    df["usd_try"] = raw_series_dict["usd_try"]
-    df["policy_rate"] = raw_series_dict["policy_rate"]
-    df["bist100_close"] = raw_series_dict["bist100_close"]
-    df["vehicle_price_proxy"] = raw_series_dict["vehicle_price_proxy"]
+    # Resampling işlemleri (Phase 2 Sorumluluğu)
+    df["cpi_index"] = resample_to_monthly_close(raw_series_dict["cpi_index"], "value")
+    df["house_price_index"] = resample_to_monthly_close(raw_series_dict["house_price_index"], "value")
+    df["usd_try"] = resample_to_monthly_close(raw_series_dict["usd_try"], "value")
+    df["vehicle_price_proxy"] = resample_to_monthly_close(raw_series_dict["vehicle_price_proxy"], "value")
 
-    # Sentetik gram altın hesabı
-    df["synthetic_gram_gold_try"] = align_and_compute_synthetic_gold(
-        raw_series_dict["gold_ons_usd"],
-        raw_series_dict["usd_try"],
+    df["deposit_rate_3m"] = resample_rates_to_monthly(raw_series_dict["deposit_rate_3m"], "value")
+    df["policy_rate"] = resample_rates_to_monthly(raw_series_dict["policy_rate"], "value")
+
+    df["bist100_close"] = resample_to_monthly_close(raw_series_dict["bist100_close"], "value")
+
+    # Sentetik gram altın hesabı (Günlük veriler üzerinden güvenli hesaplanıp sonra aylıklaştırılır)
+    daily_synthetic_gold = align_and_compute_synthetic_gold(
+        raw_series_dict["gold_ons_usd"]["value"],
+        raw_series_dict["usd_try"]["value"],
     )
+    df["synthetic_gram_gold_try"] = resample_to_monthly_close(daily_synthetic_gold.to_frame("value"), "value")
 
     # Deterministik Dönüşümler (Log-returns & Efektif Faiz)
     df["cpi_return"] = compute_log_returns(df["cpi_index"])
@@ -235,14 +238,14 @@ def build_macro_monthly_dataset(raw_series_dict: Dict[str, pd.Series]) -> pd.Dat
 
 
 def run_data_pipeline(
-    raw_series_dict: Optional[Dict[str, pd.Series]] = None,
+    raw_series_dict: Optional[Dict[str, pd.DataFrame]] = None,
     processed_dir: Optional[Path] = None,
 ) -> Path:
     """Veri boru hattını çalıştırır ve 'macro_monthly.parquet' ile 'macro_monthly.csv' üretir.
 
     Parameters
     ----------
-    raw_series_dict : dict of str -> pd.Series, optional
+    raw_series_dict : dict of str -> pd.DataFrame, optional
         Hazır ham seriler sözlüğü. Verilmezse raw snapshot'lardan okunur.
     processed_dir : Path, optional
         Çıktı dizini. Verilmezse settings.processed_data_dir kullanılır.

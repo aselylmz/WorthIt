@@ -46,8 +46,12 @@ from time_to_afford.data.validators import (
 class TestEVDSClient:
     """TCMB EVDS API İstemcisi testleri."""
 
-    def test_init_without_key_raises(self):
+    @patch("time_to_afford.data.loaders.get_settings")
+    def test_init_without_key_raises(self, mock_get_settings):
         """API anahtarı verilmediğinde açık ValueError üretilmeli."""
+        mock_settings = MagicMock()
+        mock_settings.evds_api_key = None
+        mock_get_settings.return_value = mock_settings
         with pytest.raises(ValueError, match="API anahtarı zorunludur"):
             EVDSClient(api_key=None)
 
@@ -58,7 +62,7 @@ class TestEVDSClient:
 
     @patch("requests.Session.get")
     def test_fetch_series_success(self, mock_get):
-        """Başarılı API isteğinde JSON parse edilmeli ve header doğrulanmalı."""
+        """Başarılı API isteğinde JSON parse edilmeli ve URL/header doğrulanmalı."""
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -76,8 +80,13 @@ class TestEVDSClient:
         assert isinstance(df, pd.DataFrame)
         assert len(df) == 2
         assert "TP_FG_J0" in df.columns
-        # Header'da key gönderildiği doğrulanmalı
+
+        # URL'in path parametreleriyle dogru uretildigini dogrula
         mock_get.assert_called_once()
+        call_url = mock_get.call_args[0][0]
+        assert "series=TP.FG.J0&startDate=01-01-2023&endDate=01-02-2023&type=json" in call_url
+
+        # Header'da key gönderildiği doğrulanmalı
         headers = mock_get.call_args[1].get("headers", {})
         assert headers.get("key") == "test_api_key"
 
@@ -349,17 +358,20 @@ class TestMacroPipelineRunner:
 
     def test_build_macro_monthly_dataset_contract_compliance(self):
         """Pipeline çıktısı Data Contract'a tam uyum sağlamalı ve salary_growth içermemelidir."""
-        dates = pd.date_range("2020-01-31", periods=12, freq="ME")
+        daily_dates = pd.date_range("2020-01-01", "2020-12-31", freq="D")
+
+        def make_df(val_start, val_end):
+            return pd.DataFrame({"value": np.linspace(val_start, val_end, len(daily_dates))}, index=daily_dates)
 
         raw_data = {
-            "cpi_index": pd.Series(np.linspace(100, 150, 12), index=dates),
-            "house_price_index": pd.Series(np.linspace(200, 350, 12), index=dates),
-            "deposit_rate_3m": pd.Series(np.full(12, 25.0), index=dates),
-            "usd_try": pd.Series(np.linspace(10, 20, 12), index=dates),
-            "policy_rate": pd.Series(np.full(12, 15.0), index=dates),
-            "bist100_close": pd.Series(np.linspace(2000, 5000, 12), index=dates),
-            "gold_ons_usd": pd.Series(np.linspace(1800, 2000, 12), index=dates),
-            "vehicle_price_proxy": pd.Series(np.linspace(100, 180, 12), index=dates),
+            "cpi_index": make_df(100, 150),
+            "house_price_index": make_df(200, 350),
+            "deposit_rate_3m": make_df(25.0, 25.0),
+            "usd_try": make_df(10, 20),
+            "policy_rate": make_df(15.0, 15.0),
+            "bist100_close": make_df(2000, 5000),
+            "gold_ons_usd": make_df(1800, 2000),
+            "vehicle_price_proxy": make_df(100, 180),
         }
 
         df_processed = build_macro_monthly_dataset(raw_data)
