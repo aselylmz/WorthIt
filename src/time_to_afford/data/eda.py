@@ -110,6 +110,8 @@ def compute_stationarity_tests(series: pd.Series) -> Dict[str, Any]:
     dict
         ADF p-value, KPSS p-value, test istatistikleri ve ekonometrik karar.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     clean_series = series.dropna()
     series_name = series.name or "series"
 
@@ -190,6 +192,8 @@ def compute_autocorrelations(series: pd.Series, max_lags: int = 24) -> pd.DataFr
     pd.DataFrame
         ['lag', 'acf', 'pacf'] sütunlu tablo.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     clean_series = series.dropna()
     n = len(clean_series)
     nlags = min(max_lags, n // 2 - 1) if n > 4 else 1
@@ -225,6 +229,8 @@ def perform_conditional_stl(series: pd.Series, period: int = 12) -> Dict[str, An
     dict
         'stl_applied': bool, 'trend', 'seasonal', 'residual' serileri.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     clean_series = series.dropna()
     if len(clean_series) < 2 * period:
         return {
@@ -267,6 +273,8 @@ def compute_rolling_volatility(series: pd.Series, window: int = 12) -> pd.Series
     pd.Series
         Kayan standart sapma serisi.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     clean_series = series.dropna()
     rolling_std = clean_series.rolling(window=window, min_periods=max(3, window // 2)).std()
     rolling_std.name = f"{series.name or 'series'}_rolling_vol_{window}m"
@@ -288,6 +296,8 @@ def diagnose_arch_effect(series: pd.Series, lags: int = 3) -> Dict[str, Any]:
     dict
         ARCH-LM test istatistiği, p-value ve kümelenme tespiti.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     clean_series = series.dropna()
     if len(clean_series) < 20 or clean_series.std() == 0:
         return {
@@ -364,6 +374,8 @@ def compute_cross_correlation(
     ValueError
         İki seri arasında yeterli ortak tarih kesişimi yoksa.
     """
+    # EDA receives contract-validated time series; therefore dropna() only removes
+    # permissible leading/trailing missing observations and does not collapse internal time intervals.
     df_pair = pd.DataFrame({"x": s_x, "y": s_y}).dropna()
     if len(df_pair) < max(5, max_lags + 2):
         raise ValueError(
@@ -552,9 +564,13 @@ def run_eda_pipeline(
 
     logger.info(f"EDA boru hattı çalıştırılıyor. Gözlem sayısı: {len(df)}, Sütun sayısı: {len(df.columns)}")
 
-    # 1. Tanımlayıcı İstatistikler & Durağanlık
     summary_list = []
     stationarity_list = []
+    acf_pacf_list = []
+    stl_list = []
+    rolling_vol_df_list = []
+    arch_list = []
+
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
     for col in numeric_cols:
@@ -562,6 +578,26 @@ def run_eda_pipeline(
         if len(col_series) > 0:
             summary_list.append(compute_descriptive_stats(col_series))
             stationarity_list.append(compute_stationarity_tests(col_series))
+
+            # ACF & PACF
+            acf_df = compute_autocorrelations(col_series)
+            if not acf_df.empty:
+                acf_df["series_name"] = col
+                acf_pacf_list.append(acf_df)
+
+            # STL Decomposition (requires sufficient data, handles fallback gracefully)
+            stl_res = perform_conditional_stl(col_series)
+            stl_res["series_name"] = col
+            stl_list.append(stl_res)
+
+            # Rolling Volatility & ARCH (Returns only)
+            if "return" in col:
+                r_vol = compute_rolling_volatility(col_series)
+                rolling_vol_df_list.append(r_vol)
+
+                arch_res = diagnose_arch_effect(col_series)
+                arch_res["series_name"] = col
+                arch_list.append(arch_res)
 
     summary_df = pd.DataFrame(summary_list)
     summary_path = output_dir / "summary.csv"
@@ -571,6 +607,26 @@ def run_eda_pipeline(
     stationarity_df = pd.DataFrame(stationarity_list)
     stationarity_path = output_dir / "stationarity.csv"
     stationarity_df.to_csv(stationarity_path, index=False)
+
+    # 2.1 ACF / PACF Otokorelasyonlar
+    if acf_pacf_list:
+        pd.concat(acf_pacf_list, ignore_index=True).to_csv(output_dir / "autocorrelations.csv", index=False)
+
+    # 2.2 STL Sonuçları Özet Tablosu
+    if stl_list:
+        stl_summary = []
+        for s in stl_list:
+            if s["stl_applied"]:
+                stl_summary.append({"series_name": s["series_name"], "seasonal_strength": s["seasonal_strength"]})
+        pd.DataFrame(stl_summary).to_csv(output_dir / "stl_seasonality.csv", index=False)
+
+    # 2.3 Kayan Oynaklık (Rolling Volatility)
+    if rolling_vol_df_list:
+        pd.concat(rolling_vol_df_list, axis=1).to_csv(output_dir / "rolling_volatility.csv")
+
+    # 2.4 ARCH-LM Oynaklık Kümelenmesi Testi
+    if arch_list:
+        pd.DataFrame(arch_list).to_csv(output_dir / "arch_tests.csv", index=False)
 
     # 3. Korelasyon Matrisleri (Pearson & Spearman)
     corr_pearson = df[numeric_cols].corr(method="pearson")
@@ -586,6 +642,22 @@ def run_eda_pipeline(
     breaks_path = output_dir / "structural_breaks.csv"
     breaks_df.to_csv(breaks_path, index=False)
 
+    # 4.1 Cross-Correlation (CCF)
+    ccf_list = []
+    # Kur geçişkenliği (USD -> TÜFE)
+    if "usd_try_return" in numeric_cols and "cpi_return" in numeric_cols:
+        ccf_usd_cpi = compute_cross_correlation(df["usd_try_return"], df["cpi_return"])
+        ccf_usd_cpi["pair"] = "usd_try_return -> cpi_return"
+        ccf_list.append(ccf_usd_cpi)
+    # Politika Faizi -> Mevduat Faizi aktarımı
+    if "policy_rate" in numeric_cols and "deposit_rate_3m" in numeric_cols:
+        ccf_policy_dep = compute_cross_correlation(df["policy_rate"], df["deposit_rate_3m"])
+        ccf_policy_dep["pair"] = "policy_rate -> deposit_rate_3m"
+        ccf_list.append(ccf_policy_dep)
+
+    if ccf_list:
+        pd.concat(ccf_list, ignore_index=True).to_csv(output_dir / "cross_correlation.csv", index=False)
+
     # 5. Aday Model Matrisi
     candidate_matrix = generate_candidate_model_matrix(stationarity_list)
 
@@ -595,8 +667,8 @@ def run_eda_pipeline(
 
     report_md_content = f"""# Keşifsel Veri Analizi (EDA) Sentez Raporu
 
-**Analiz Tarihi:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}  
-**Veri Kapsamı:** {start_date_str} – {end_date_str} ({len(df)} Aylık Gözlem)  
+**Analiz Tarihi:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Veri Kapsamı:** {start_date_str} – {end_date_str} ({len(df)} Aylık Gözlem)
 **İncelenen Değişken Sayısı:** {len(numeric_cols)}
 
 ---
@@ -623,6 +695,15 @@ def run_eda_pipeline(
     for _, row in candidate_matrix.iterrows():
         report_md_content += f"| `{row['series_name']}` | {row['stationarity_decision']} | `{row['suggested_transformation']}` | {row['candidate_models']} |\n"
 
+    report_md_content += f"""
+## 6. Gelişmiş Zaman Serisi Teşhisleri (Zenginleştirilmiş Analizler)
+* **ACF/PACF Otokorelasyon:** (Bkz: `autocorrelations.csv`)
+* **STL Mevsimsellik:** (Bkz: `stl_seasonality.csv`)
+* **12-Aylık Kayan Oynaklık:** (Bkz: `rolling_volatility.csv`)
+* **ARCH-LM Oynaklık Kümelenmesi:** (Bkz: `arch_tests.csv`)
+* **Öncü-Gecikmeli İlişkiler (CCF):** Kur Geçişkenliği ve Faiz Aktarımı (Bkz: `cross_correlation.csv`)
+"""
+
     report_path = output_dir / "eda_report.md"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report_md_content)
@@ -635,5 +716,10 @@ def run_eda_pipeline(
         "correlation": corr_path,
         "correlation_spearman": corr_spearman_path,
         "structural_breaks": breaks_path,
+        "autocorrelations": output_dir / "autocorrelations.csv",
+        "stl_seasonality": output_dir / "stl_seasonality.csv",
+        "rolling_volatility": output_dir / "rolling_volatility.csv",
+        "arch_tests": output_dir / "arch_tests.csv",
+        "cross_correlation": output_dir / "cross_correlation.csv",
         "report": report_path,
     }

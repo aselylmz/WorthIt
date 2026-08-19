@@ -252,24 +252,22 @@ class TestValidators:
         with pytest.raises(ValidationError):
             validate_numeric_bounds(df, column="rate", allow_zero=True, allow_negative=False)
 
-    def test_validate_missing_values_within_active_window(self):
-        """Geçerli aralık içindeki beklenmeyen null hata vermeli."""
-        df = pd.DataFrame(
-            {"cpi": [100.0, np.nan, 105.0]},
-            index=pd.to_datetime(["2023-01-31", "2023-02-28", "2023-03-31"]),
-        )
-        with pytest.raises(DataIntegrityError):
-            validate_missing_values(df, column="cpi", start_date=pd.Timestamp("2023-01-01"))
+    def test_validate_missing_values_internal_nan_fails(self):
+        """Internal NaN'ler reddedilmeli, ancak leading ve trailing NaN'ler kabul edilmelidir."""
+        dates = pd.date_range("2020-01-01", periods=5, freq="D")
 
-    def test_validate_missing_values_allowed_before_start_date(self):
-        """Serinin başlangıç tarihinden önceki NaN'lar hata vermemeli."""
-        # KFE örneğin 2010 öncesi NaN olabilir
-        df = pd.DataFrame(
-            {"kfe": [np.nan, np.nan, 100.0, 102.0]},
-            index=pd.to_datetime(["2008-01-31", "2009-01-31", "2010-01-31", "2010-02-28"]),
-        )
-        # 2010-01-01 öncesi eksiklik kabul edilmeli
-        validate_missing_values(df, column="kfe", start_date=pd.Timestamp("2010-01-01"))
+        # 1. Leading NaN: İlk değer NaN, diğerleri dolu. Kabul edilmeli.
+        df_leading = pd.DataFrame({"col": [np.nan, 2.0, 3.0, 4.0, 5.0]}, index=dates)
+        validate_missing_values(df_leading, "col")  # Should not raise
+
+        # 2. Trailing NaN: Son değer NaN, diğerleri dolu. Kabul edilmeli.
+        df_trailing = pd.DataFrame({"col": [1.0, 2.0, 3.0, 4.0, np.nan]}, index=dates)
+        validate_missing_values(df_trailing, "col")  # Should not raise
+
+        # 3. Internal NaN: Ortada NaN var. Reddedilmeli.
+        df_internal = pd.DataFrame({"col": [1.0, 2.0, np.nan, 4.0, 5.0]}, index=dates)
+        with pytest.raises(DataIntegrityError, match="ortasında delik olamaz"):
+            validate_missing_values(df_internal, "col")
 
 
 # =====================================================================

@@ -142,13 +142,13 @@ def validate_numeric_bounds(
 def validate_missing_values(
     df: pd.DataFrame,
     column: str,
-    start_date: Optional[pd.Timestamp] = None,
-    max_consecutive_nulls: int = 0,
 ) -> None:
     """Belirtilen serinin geçerli tarih penceresi (active window) içindeki eksikliklerini denetler.
 
-    Serinin başlangıç tarihinden önceki dönemler yapısal olarak mevcut olmadığı için
-    eksik veri sayılmaz. Ancak başlangıç tarihinden sonraki dönemlerde null bulunamaz.
+    Serinin ilk geçerli (first_valid) ile son geçerli (last_valid) değeri arasındaki
+    aktif tarih penceresinde (internal) hiçbir NaN olmamalıdır.
+    Leading (baştaki) ve Trailing (sondaki) NaN'lar ekonomik veri yayım gecikmeleri
+    veya serilerin farklı başlama tarihleri nedeniyle normal kabul edilir.
 
     Parameters
     ----------
@@ -156,34 +156,31 @@ def validate_missing_values(
         Veri tablosu.
     column : str
         Kontrol edilecek sütun adı.
-    start_date : pd.Timestamp, optional
-        Serinin resmî başlangıç tarihi.
-    max_consecutive_nulls : int, default 0
-        İzin verilen maksimum ardışık boş ay sayısı.
 
     Raises
     ------
     DataIntegrityError
-        Aktif pencere içinde beklenmeyen eksiklik tespit edilirse.
+        Aktif pencere içinde beklenmeyen eksiklik tespit edilirse (Internal NaN).
     """
     if column not in df.columns:
         raise ValidationError(f"'{column}' sütunu DataFrame içinde bulunamadı.")
 
-    if start_date is not None:
-        active_series = df.loc[df.index >= start_date, column]
-    else:
-        # Serinin ilk geçerli değerinden itibaren aktif pencere kabul et
-        first_valid = df[column].first_valid_index()
-        if first_valid is None:
-            raise DataIntegrityError(f"'{column}' serisi tamamen boştur.")
-        active_series = df.loc[df.index >= first_valid, column]
+    first_valid = df[column].first_valid_index()
+    last_valid = df[column].last_valid_index()
+
+    if first_valid is None or last_valid is None:
+        raise DataIntegrityError(f"'{column}' serisi tamamen boştur.")
+
+    # Aktif pencere içindeki seriyi al
+    active_series = df.loc[first_valid:last_valid, column]
 
     null_count = active_series.isna().sum()
-    if null_count > max_consecutive_nulls:
+    if null_count > 0:
         null_dates = active_series[active_series.isna()].index.tolist()
         raise DataIntegrityError(
-            f"'{column}' serisinde aktif tarih penceresinde ({start_date or 'başlangıç'} sonrası) "
-            f"beklenmeyen eksik değer (null) tespit edildi: {null_dates[:5]} (Toplam: {null_count})"
+            f"'{column}' serisinde aktif tarih penceresinde ({first_valid} ile {last_valid} arasında) "
+            f"beklenmeyen eksik değer (Internal NaN) tespit edildi: {null_dates[:5]} (Toplam: {null_count}). "
+            f"Data Contract gereği serilerin ortasında delik olamaz."
         )
 
 
@@ -255,5 +252,10 @@ def validate_data_contract(df: pd.DataFrame) -> None:
             raise DataContractError(
                 f"'{col}' sütunu sayısal (numeric/float64) veri tipinde olmalıdır, alınan: {df[col].dtype}"
             )
+
+    # 4. Internal NaN (Eksik Veri) Kontrolü
+    # Leading ve Trailing NaN'lara izin verilir, ancak ortasında boşluk (Internal NaN) olamaz.
+    for col in REQUIRED_CONTRACT_COLUMNS:
+        validate_missing_values(df, col)
 
     logger.info("MVP Data Contract doğrulaması başarıyla tamamlandı.")
