@@ -48,6 +48,11 @@ def format_tl(value: float) -> str:
     return f"{value:.0f} ₺"
 
 
+def format_with_dots(value: float) -> str:
+    """Sayıyı binlik ayraç olarak nokta kullanan tam haliyle biçimlendirir (ör: 3.000.000)."""
+    return f"{value:,.0f}".replace(",", ".")
+
+
 def duration_label(years: int, months: int) -> str:
     """Yıl ve ayı okunabilir Türkçe metne dönüştürür."""
     parts = []
@@ -69,79 +74,84 @@ st.divider()
 # ── Giriş formu ───────────────────────────────────────────────────────
 st.header("📋 Finansal Bilgileriniz")
 
-with st.form("user_input_form"):
-    col1, col2 = st.columns(2)
+col1, col2 = st.columns(2)
 
-    with col1:
-        st.subheader("Mevcut Durumunuz")
-        initial_savings = st.number_input(
-            "Mevcut Birikim (TL)",
-            min_value=0.0,
-            step=10_000.0,
-            format="%.0f",
-            help="Bugün itibarıyla toplam birikimleriniz.",
-        )
-        monthly_saving = st.number_input(
-            "Aylık Düzenli Tasarruf (TL)",
-            min_value=0.0,
-            step=1_000.0,
-            format="%.0f",
-            help="Her ay düzenli olarak biriktirdiğiniz miktar.",
-        )
-        investment_type = st.selectbox(
-            "Birikiminizin Bulunduğu Yatırım Aracı",
-            options=[i.value for i in InvestmentType],
-            format_func=lambda x: INVESTMENT_LABELS.get(x, x.upper()),
-        )
-
-    with col2:
-        st.subheader("Hedefiniz")
-        target_type = st.selectbox(
-            "Hedef Varlık Türü",
-            options=[t.value for t in TargetType],
-            format_func=lambda x: TARGET_LABELS.get(x, x),
-        )
-        target_price = st.number_input(
-            "Hedef Varlığın Bugünkü Fiyatı (TL)",
-            min_value=1.0,
-            value=3_000_000.0,
-            step=100_000.0,
-            format="%.0f",
-            help="Satın almak istediğiniz ev veya arabanın güncel piyasa değeri.",
-        )
-
-        st.markdown("---")
-        st.markdown("**Simülasyon Ayarları**")
-        scenario_key = st.selectbox(
-            "Ekonomik Senaryo",
-            options=list(PRESETS.keys()),
-            index=0,
-            format_func=lambda k: PRESETS[k].name,
-            help=(
-                "Farklı enflasyon/getiri varsayımları altında sonucu görün. "
-                "Temel = tarihsel kaba kalibrasyon, İyimser/Kötümser = alternatif "
-                "ekonomik koşullar."
-            ),
-        )
-        n_paths = st.select_slider(
-            "Senaryo Sayısı",
-            options=[1_000, 2_000, 5_000, 10_000],
-            value=5_000,
-            help="Daha fazla senaryo = daha doğru tahmin, daha uzun süre.",
-        )
-        horizon_years = st.slider(
-            "Simülasyon Ufku (Yıl)",
-            min_value=5,
-            max_value=30,
-            value=20,
-            step=5,
-        )
-
-    submitted = st.form_submit_button(
-        "🚀 Simülasyonu Başlat",
-        type="primary",
-        use_container_width=True,
+with col1:
+    st.subheader("Mevcut Durumunuz")
+    initial_savings = st.number_input(
+        "Mevcut Birikim (TL)",
+        min_value=0.0,
+        step=10_000.0,
+        format="%.0f",
+        help="Bugün itibarıyla toplam birikimleriniz.",
     )
+    st.caption(f"→ {format_with_dots(initial_savings)} ₺")
+
+    monthly_saving = st.number_input(
+        "Aylık Düzenli Tasarruf (TL)",
+        min_value=0.0,
+        step=1_000.0,
+        format="%.0f",
+        help="Her ay düzenli olarak biriktirdiğiniz miktar.",
+    )
+    st.caption(f"→ {format_with_dots(monthly_saving)} ₺")
+
+    investment_type = st.selectbox(
+        "Birikiminizin Bulunduğu Yatırım Aracı",
+        options=[i.value for i in InvestmentType],
+        format_func=lambda x: INVESTMENT_LABELS.get(x, x.upper()),
+    )
+
+with col2:
+    st.subheader("Hedefiniz")
+    target_type = st.selectbox(
+        "Hedef Varlık Türü",
+        options=[t.value for t in TargetType],
+        format_func=lambda x: TARGET_LABELS.get(x, x),
+    )
+    target_price = st.number_input(
+        "Hedef Varlığın Bugünkü Fiyatı (TL)",
+        min_value=1.0,
+        value=3_000_000.0,
+        step=100_000.0,
+        format="%.0f",
+        help="Satın almak istediğiniz ev veya arabanın güncel piyasa değeri.",
+    )
+    st.caption(f"→ {format_with_dots(target_price)} ₺")
+
+    st.markdown("---")
+    st.markdown("**Simülasyon Ayarları**")
+    scenario_key = st.selectbox(
+        "Ekonomik Senaryo",
+        options=list(PRESETS.keys()),
+        index=0,
+        format_func=lambda k: PRESETS[k].name,
+        help=(
+            "Farklı enflasyon/getiri varsayımları altında sonucu görün. "
+            "Temel = tarihsel kaba kalibrasyon, İyimser/Kötümser = alternatif "
+            "ekonomik koşullar."
+        ),
+    )
+    n_paths = st.select_slider(
+        "Senaryo Sayısı",
+        options=[1_000, 2_000, 5_000, 10_000],
+        value=5_000,
+        help="Daha fazla senaryo = daha doğru tahmin, daha uzun süre.",
+    )
+    horizon_years = st.slider(
+        "Simülasyon Ufku (Yıl)",
+        min_value=5,
+        max_value=30,
+        value=20,
+        step=5,
+    )
+
+st.divider()
+submitted = st.button(
+    "🚀 Simülasyonu Başlat",
+    type="primary",
+    use_container_width=True,
+)
 
 # ── Simülasyon & Sonuçlar ─────────────────────────────────────────────
 if submitted:
