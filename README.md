@@ -15,16 +15,15 @@ uygulamasıdır.
 
 Kullanıcı minimum bilgi girer:
 
-- Meslek
 - Mevcut birikim miktarı
-- Birikimin bulunduğu yatırım aracı (altın, BIST, mevduat)
-- Hedef türü (ev veya araba)
-- Hedef varlığın mevcut fiyatı
 - Aylık düzenli tasarruf miktarı
+- Birikimin bulunduğu yatırım aracı (altın, BIST, mevduat)
+- Hedef türü (ev veya araba) ve mevcut fiyatı
+- Ekonomik senaryo (Temel / İyimser / Kötümser)
 
-Sistem, farklı ekonomik zaman serilerini ayrı ayrı modelleyerek 10.000 Monte
-Carlo senaryosu üretir ve her senaryoda kullanıcının servetinin hedef fiyatı
-ilk kez geçtiği zamanı hesaplar.
+Sistem, enflasyon ile ilişkilendirilmiş (korelasyonlu) ekonomik değişkenler
+üzerinden binlerce Monte Carlo senaryosu üretir ve her senaryoda kullanıcının
+servetinin hedef fiyatı ilk kez geçtiği zamanı hesaplar.
 
 ## Motivasyon
 
@@ -48,15 +47,19 @@ T = min{t : W_t >= P_t}
 
 ### Modellenen Değişkenler
 
-| Değişken | Açıklama |
-|----------|----------|
-| Gelir / Maaş | Meslek bazlı gelir ve artış oranları |
-| Enflasyon | TÜFE bazlı tüketici fiyat endeksi |
-| Konut fiyatları | Konut fiyat endeksi |
-| Otomobil fiyatları | Araç fiyat serisi |
-| Altın getirisi | Altın fiyat ve getiri dağılımı |
-| BIST getirisi | Borsa endeks getirisi |
-| Mevduat getirisi | Faiz bazlı getiri |
+| Değişken | Açıklama | Durum |
+|----------|----------|-------|
+| Enflasyon | TÜFE bazlı tüketici fiyat endeksi | ✅ Gerçek veriyle kalibre |
+| Konut fiyatları | Konut fiyat endeksi (KFE) | ✅ Gerçek veriyle kalibre |
+| Altın getirisi | Sentetik gram altın (TL) getiri dağılımı | ✅ Gerçek veriyle kalibre |
+| BIST getirisi | Borsa endeks getirisi | ✅ Gerçek veriyle kalibre |
+| Mevduat getirisi | Faiz bazlı getiri | ✅ Gerçek veriyle kalibre |
+| Otomobil fiyatları | Araç fiyat serisi | ⚠️ Kaba varsayım (güvenilir resmi seri henüz bulunamadı) |
+| Gelir / Maaş | Meslek bazlı gelir ve artış oranları | ⚠️ Kaba varsayım (gerçek bireysel maaş verisi mevcut değil) |
+
+Tüm değişkenler ayrıca ortak bir enflasyon faktörü üzerinden birbiriyle
+ilişkilendirilir (bkz. [Metodoloji](docs/methodology.md)) — bağımsız
+örnekleme yapılmaz.
 
 ### Monte Carlo Simülasyonu
 
@@ -70,17 +73,15 @@ Her simülasyon path'inde:
 
 ### Sonuç Çıktıları
 
-- **Temel senaryo** (median)
-- **İyimser senaryo** (P10)
-- **Kötümser senaryo** (P90)
-- Belirli yıllar içinde satın alma olasılığı
-- Servet vs. hedef fiyat grafiği
-- Sonucu en fazla etkileyen faktörler
+- **Medyan sonuç** (P50), **en iyi %10 ihtimal** (P10), **en kötü %10 ihtimal** (P90)
+- 5/10/15 yıl içinde satın alma olasılığı
+- Ay bazında birikimli olasılık dağılımı grafiği
+- Hedefe ulaşan/ulaşamayan senaryo oranı
 
 ## Mimari
 
 ```
-Data Pipeline → Forecasting → Monte Carlo Simulation → Affordability Engine → API → UI
+Data Pipeline → Simulation (Monte Carlo) → Affordability Engine → UI (Streamlit)
 ```
 
 Detaylar için: [docs/architecture.md](docs/architecture.md)
@@ -118,6 +119,9 @@ pytest tests/ -v
 cp .env.example .env
 ```
 
+Gerçek veriyle çalışmak için `EVDS_API_KEY` gereklidir — TCMB EVDS'ten
+ücretsiz alınabilir: https://evds2.tcmb.gov.tr/index.php?/evds/login
+
 ## Proje Yapısı
 
 ```
@@ -147,6 +151,7 @@ WorthIt/
 │       └── utils/        # Yardımcı araçlar
 │
 ├── app/                  # Streamlit UI
+├── scripts/              # Veri çekme ve kalibrasyon script'leri
 ├── tests/                # Testler
 ├── docs/                 # Dokümantasyon
 └── .github/workflows/    # CI/CD
@@ -154,15 +159,57 @@ WorthIt/
 
 ## Kullanım
 
-> **Not:** Proje geliştirme aşamasındadır. Kullanım talimatları ilerleyen
-> fazlarda güncellenecektir.
+### 1. Gerçek veriyi çek
+
+```bash
+python scripts/fetch_data.py
+```
+
+TCMB EVDS ve Yahoo Finance'ten TÜFE, KFE, USD/TRY, mevduat/politika
+faizi, BIST-100 ve altın verilerini çeker; `data/raw/`e değiştirilemez
+(immutable) anlık görüntüler kaydeder ve `data/processed/macro_monthly.parquet`
+dosyasını üretir. Belirli bir tarih aralığı için:
+
+```bash
+python scripts/fetch_data.py --start 2015-01-01 --end 2026-08-01
+```
+
+### 2. Simülasyon parametrelerini kalibre et (opsiyonel)
+
+Yeni veri çektikten sonra dağılım parametrelerini (mu, sigma) ve
+enflasyon korelasyonlarını yeniden hesaplamak için:
+
+```bash
+python scripts/calibrate_distributions.py
+```
+
+Çıktıyı gözden geçirip `src/time_to_afford/simulation/distributions.py`
+içindeki sabitleri elle güncelleyin (script kaynak kodu otomatik
+değiştirmez).
+
+### 3. Uygulamayı başlat
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Formu doldurup ("Mevcut Birikim", "Aylık Tasarruf", yatırım aracı, hedef
+varlık ve ekonomik senaryo) simülasyonu başlatın; P10/P50/P90 tahminleri,
+yıllara göre satın alma olasılığı ve olasılık dağılımı grafiği anında
+görüntülenir.
+
+> **Not:** `data/processed/macro_monthly.parquet` olmadan da uygulama
+> çalışır — bu durumda `distributions.py`'deki mevcut (önceden kalibre
+> edilmiş) parametreler kullanılır.
 
 ## Limitasyonlar
 
 - Bu sistem bir **tahmin aracıdır**, kesin bir finansal planlama aracı değildir.
 - Model geçmiş verilere dayanır; yapısal kırılmalar (ekonomik krizler, politika
   değişiklikleri) tahmin doğruluğunu önemli ölçüde etkileyebilir.
-- MVP'de sınırlı sayıda meslek ve yatırım aracı desteklenmektedir.
+- Otomobil fiyat artışı ve maaş artışı hâlâ kaba varsayımlara dayanır —
+  gerçek veriyle kalibre edilmemiştir (bkz. [docs/data_sources.md](docs/data_sources.md) § 2.5, § 2.6).
+- MVP'de sınırlı sayıda yatırım aracı (altın, BIST, mevduat) desteklenmektedir.
 - Vergiler, kredi ve borçlanma gibi faktörler ilk sürümde dahil değildir.
 
 ## ⚠️ Disclaimer
