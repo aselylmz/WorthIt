@@ -33,8 +33,7 @@ from time_to_afford.simulation.distributions import (
     LogNormalParams,
     NormalParams,
 )
-from time_to_afford.simulation.monte_carlo import SimulationOutput, run_simulation
-
+from time_to_afford.simulation.monte_carlo import SimulationOutput
 
 # =====================================================================
 # 1. Senaryo Parametresi Veri Sınıfı
@@ -177,16 +176,14 @@ def run_scenario(
 
     Notes
     -----
-    Senaryo parametreleri şu anda salary_growth ve hedef fiyat artışını
-    override eder. Yatırım getirisi senaryo'dan değil, investment_type
-    string'inden belirlenir (gelecekte senaryo bazlı yapılabilir).
+    Senaryonun tüm dağılım parametreleri (maaş, enflasyon, konut/araç fiyatı,
+    altın/BIST/mevduat getirisi) `sample_correlated_variables` üzerinden
+    ortak enflasyon faktörüyle ilişkilendirilerek örneklenir — `run_simulation`
+    ile aynı korelasyon mantığı kullanılır.
     """
     from time_to_afford.affordability.target_price import compute_price_paths
     from time_to_afford.affordability.wealth import compute_wealth_paths
-    from time_to_afford.simulation.distributions import (
-        sample_investment_return,
-        sample_log_normal,
-    )
+    from time_to_afford.simulation.distributions import sample_correlated_variables
     from time_to_afford.simulation.monte_carlo import (
         SimulationOutput,
         _find_first_affordable_month,
@@ -194,14 +191,24 @@ def run_scenario(
 
     rng = np.random.default_rng(seed)
 
-    # --- Senaryo parametreleriyle örnekleme ---
-    investment_factors = sample_investment_return(investment_type, n_steps, n_paths, rng)
-    salary_factors = sample_log_normal(scenario.salary_growth, n_steps, n_paths, rng)
-
-    price_growth_params = (
-        scenario.house_price if target_type.lower() == "house" else scenario.car_price
+    # --- Senaryo parametreleriyle korelasyonlu örnekleme ---
+    correlated = sample_correlated_variables(
+        investment_type,
+        target_type,
+        n_steps,
+        n_paths,
+        rng,
+        inflation_params=scenario.inflation,
+        salary_growth_params=scenario.salary_growth,
+        house_price_params=scenario.house_price,
+        car_price_params=scenario.car_price,
+        gold_params=scenario.gold,
+        bist_params=scenario.bist,
+        deposit_params=scenario.deposit,
     )
-    price_growth_factors = sample_log_normal(price_growth_params, n_steps, n_paths, rng)
+    investment_factors = correlated["investment_return"]
+    salary_factors = correlated["salary_growth"]
+    price_growth_factors = correlated["target_price_growth"]
 
     # --- Servet ve fiyat yolları ---
     wealth_paths = compute_wealth_paths(

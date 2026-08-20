@@ -425,6 +425,13 @@ def sample_correlated_variables(
     n_paths: int,
     rng: Generator,
     inflation_rhos: Optional[dict[str, float]] = None,
+    inflation_params: Optional[LogNormalParams] = None,
+    salary_growth_params: Optional[LogNormalParams] = None,
+    house_price_params: Optional[LogNormalParams] = None,
+    car_price_params: Optional[LogNormalParams] = None,
+    gold_params: Optional[NormalParams] = None,
+    bist_params: Optional[NormalParams] = None,
+    deposit_params: Optional[NormalParams] = None,
 ) -> dict[str, np.ndarray]:
     """Ortak enflasyon faktörüyle ilişkilendirilmiş simülasyon değişkenlerini örnekler.
 
@@ -436,6 +443,11 @@ def sample_correlated_variables(
 
     Her değişkenin marjinal dağılımı (mu, sigma) bağımsız örnekleme ile
     birebir aynı kalır; değişen yalnızca değişkenler arasındaki korelasyondur.
+
+    Parametre override'ları (`*_params`), scenarios.py'deki ScenarioParams
+    (BASELINE/OPTIMISTIC/PESSIMISTIC) gibi varsayılan dışı dağılım
+    parametreleriyle çalışmak için kullanılır. Hiçbiri verilmezse modül
+    seviyesindeki varsayılan parametreler (INFLATION_PARAMS vb.) kullanılır.
 
     Parameters
     ----------
@@ -452,6 +464,10 @@ def sample_correlated_variables(
     inflation_rhos : dict of str -> float, optional
         Her değişkenin ortak enflasyon faktörüyle korelasyonu.
         None ise DEFAULT_INFLATION_RHOS kullanılır.
+    inflation_params, salary_growth_params, house_price_params,
+    car_price_params, gold_params, bist_params, deposit_params : optional
+        İlgili değişken için varsayılan yerine kullanılacak dağılım
+        parametreleri (senaryo override'ları için).
 
     Returns
     -------
@@ -466,6 +482,13 @@ def sample_correlated_variables(
         Bilinmeyen investment_type veya target_type girilirse.
     """
     rhos = inflation_rhos if inflation_rhos is not None else DEFAULT_INFLATION_RHOS
+    inflation_p = inflation_params if inflation_params is not None else INFLATION_PARAMS
+    salary_p = salary_growth_params if salary_growth_params is not None else SALARY_GROWTH_PARAMS
+    house_p = house_price_params if house_price_params is not None else HOUSE_PRICE_PARAMS
+    car_p = car_price_params if car_price_params is not None else CAR_PRICE_PARAMS
+    gold_p = gold_params if gold_params is not None else GOLD_PARAMS
+    bist_p = bist_params if bist_params is not None else BIST_PARAMS
+    deposit_p = deposit_params if deposit_params is not None else DEPOSIT_PARAMS
 
     inv = investment_type.lower().strip()
     if inv not in ("gold", "bist", "deposit"):
@@ -483,21 +506,19 @@ def sample_correlated_variables(
 
     shocks = sample_common_factor_shocks(rhos, n_steps, n_paths, rng)
 
-    inflation_factors = np.exp(INFLATION_PARAMS.mu + INFLATION_PARAMS.sigma * shocks["inflation"])
-    salary_factors = np.exp(
-        SALARY_GROWTH_PARAMS.mu + SALARY_GROWTH_PARAMS.sigma * shocks["salary_growth"]
-    )
+    inflation_factors = np.exp(inflation_p.mu + inflation_p.sigma * shocks["inflation"])
+    salary_factors = np.exp(salary_p.mu + salary_p.sigma * shocks["salary_growth"])
 
-    price_params = HOUSE_PRICE_PARAMS if tt == "house" else CAR_PRICE_PARAMS
+    price_params = house_p if tt == "house" else car_p
     price_shock = shocks["house_price"] if tt == "house" else shocks["car_price"]
     price_growth_factors = np.exp(price_params.mu + price_params.sigma * price_shock)
 
     if inv == "gold":
-        investment_factors = np.exp(GOLD_PARAMS.mu + GOLD_PARAMS.sigma * shocks["gold"])
+        investment_factors = np.exp(gold_p.mu + gold_p.sigma * shocks["gold"])
     elif inv == "bist":
-        investment_factors = np.exp(BIST_PARAMS.mu + BIST_PARAMS.sigma * shocks["bist"])
+        investment_factors = np.exp(bist_p.mu + bist_p.sigma * shocks["bist"])
     else:  # deposit
-        raw = DEPOSIT_PARAMS.mu + DEPOSIT_PARAMS.sigma * shocks["deposit"]
+        raw = deposit_p.mu + deposit_p.sigma * shocks["deposit"]
         investment_factors = 1.0 + np.clip(raw, a_min=-0.005, a_max=None)
 
     return {
