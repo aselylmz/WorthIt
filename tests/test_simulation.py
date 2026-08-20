@@ -11,8 +11,12 @@ Kapsam:
 import numpy as np
 import pytest
 
+from time_to_afford.simulation.distributions import (
+    DEFAULT_INFLATION_RHOS,
+    sample_common_factor_shocks,
+    sample_correlated_variables,
+)
 from time_to_afford.simulation.monte_carlo import SimulationOutput, run_simulation
-
 
 # =====================================================================
 # Yardımcı sabitler
@@ -409,4 +413,172 @@ class TestRunSimulationAllCombinations:
         )
         assert isinstance(out, SimulationOutput)
         assert out.affordability_months.shape == (50,)
+        assert 0.0 <= out.never_affordable_pct <= 1.0
+
+
+# =====================================================================
+# 7. Korelasyonlu (Ortak Faktör) Örnekleme
+# =====================================================================
+
+
+class TestSampleCommonFactorShocks:
+    """sample_common_factor_shocks() — ortak enflasyon faktörü modeli testleri."""
+
+    def test_returns_expected_keys(self):
+        rng = np.random.default_rng(0)
+        shocks = sample_common_factor_shocks(
+            {"a": 0.5, "b": -0.3}, n_steps=10, n_paths=5, rng=rng
+        )
+        assert set(shocks.keys()) == {"inflation", "a", "b"}
+
+    def test_shapes(self):
+        rng = np.random.default_rng(0)
+        shocks = sample_common_factor_shocks(
+            {"a": 0.5}, n_steps=12, n_paths=100, rng=rng
+        )
+        for arr in shocks.values():
+            assert arr.shape == (12, 100)
+
+    def test_rho_out_of_range_raises(self):
+        rng = np.random.default_rng(0)
+        with pytest.raises(ValueError):
+            sample_common_factor_shocks({"a": 1.5}, n_steps=10, n_paths=5, rng=rng)
+        with pytest.raises(ValueError):
+            sample_common_factor_shocks({"a": -1.5}, n_steps=10, n_paths=5, rng=rng)
+
+    def test_rho_boundary_values_allowed(self):
+        rng = np.random.default_rng(0)
+        shocks = sample_common_factor_shocks(
+            {"perfect": 1.0, "independent": 0.0}, n_steps=10, n_paths=5, rng=rng
+        )
+        assert np.allclose(shocks["perfect"], shocks["inflation"])
+
+    def test_empirical_correlation_matches_rho(self):
+        """Büyük örneklemde ampirik korelasyon rho_i * rho_j'ye yakın olmalı."""
+        rng = np.random.default_rng(42)
+        shocks = sample_common_factor_shocks(
+            {"a": 0.6, "b": 0.3}, n_steps=1, n_paths=200_000, rng=rng
+        )
+        empirical_corr = np.corrcoef(shocks["a"].ravel(), shocks["b"].ravel())[0, 1]
+        expected_corr = 0.6 * 0.3
+        assert empirical_corr == pytest.approx(expected_corr, abs=0.02)
+
+    def test_each_variable_marginally_standard_normal(self):
+        """Her değişkenin kendi marjinal dağılımı yaklaşık N(0, 1) olmalı."""
+        rng = np.random.default_rng(1)
+        shocks = sample_common_factor_shocks(
+            {"a": 0.7}, n_steps=1, n_paths=200_000, rng=rng
+        )
+        assert np.mean(shocks["a"]) == pytest.approx(0.0, abs=0.02)
+        assert np.std(shocks["a"]) == pytest.approx(1.0, abs=0.02)
+
+
+class TestSampleCorrelatedVariables:
+    """sample_correlated_variables() — entegre korelasyonlu örnekleme testleri."""
+
+    def test_returns_expected_keys(self):
+        rng = np.random.default_rng(0)
+        result = sample_correlated_variables("gold", "house", 12, 50, rng)
+        assert set(result.keys()) == {
+            "inflation",
+            "salary_growth",
+            "investment_return",
+            "target_price_growth",
+        }
+
+    def test_shapes(self):
+        rng = np.random.default_rng(0)
+        result = sample_correlated_variables("bist", "car", 24, 30, rng)
+        for arr in result.values():
+            assert arr.shape == (24, 30)
+
+    def test_factors_are_positive(self):
+        """Tüm çarpanlar (fiyat/getiri) pozitif olmalı."""
+        rng = np.random.default_rng(0)
+        result = sample_correlated_variables("deposit", "house", 60, 500, rng)
+        for name, arr in result.items():
+            assert np.all(arr > 0), f"{name} negatif veya sıfır çarpan içeriyor"
+
+    def test_unknown_investment_type_raises(self):
+        rng = np.random.default_rng(0)
+        with pytest.raises(ValueError, match="Bilinmeyen yatırım türü"):
+            sample_correlated_variables("crypto", "house", 12, 10, rng)
+
+    def test_unknown_target_type_raises(self):
+        rng = np.random.default_rng(0)
+        with pytest.raises(ValueError, match="Bilinmeyen hedef türü"):
+            sample_correlated_variables("gold", "yacht", 12, 10, rng)
+
+    def test_same_seed_reproducible(self):
+        result_a = sample_correlated_variables(
+            "gold", "house", 12, 50, np.random.default_rng(7)
+        )
+        result_b = sample_correlated_variables(
+            "gold", "house", 12, 50, np.random.default_rng(7)
+        )
+        for key in result_a:
+            assert np.array_equal(result_a[key], result_b[key])
+
+    def test_custom_inflation_rhos_used(self):
+        """inflation_rhos verildiğinde varsayılan yerine bu kullanılmalı."""
+        rng_zero = np.random.default_rng(3)
+        result_zero_corr = sample_correlated_variables(
+            "gold",
+            "house",
+            n_steps=1,
+            n_paths=200_000,
+            rng=rng_zero,
+            inflation_rhos={**DEFAULT_INFLATION_RHOS, "gold": 0.0},
+        )
+        rng_full = np.random.default_rng(3)
+        result_full_corr = sample_correlated_variables(
+            "gold",
+            "house",
+            n_steps=1,
+            n_paths=200_000,
+            rng=rng_full,
+            inflation_rhos={**DEFAULT_INFLATION_RHOS, "gold": 0.95},
+        )
+        # rho=0.95 durumunda altın getirisi ile enflasyon arasındaki korelasyon
+        # rho=0.0 durumundakinden belirgin biçimde yüksek olmalı.
+        corr_zero = np.corrcoef(
+            np.log(result_zero_corr["inflation"]).ravel(),
+            np.log(result_zero_corr["investment_return"]).ravel(),
+        )[0, 1]
+        corr_full = np.corrcoef(
+            np.log(result_full_corr["inflation"]).ravel(),
+            np.log(result_full_corr["investment_return"]).ravel(),
+        )[0, 1]
+        assert corr_full > corr_zero + 0.5
+
+
+class TestRunSimulationUsesCorrelation:
+    """run_simulation() artık korelasyonlu örnekleme kullanmalı."""
+
+    def test_high_inflation_rho_variables_move_together(self):
+        """Ortak enflasyon faktörü sayesinde maaş ve konut fiyat artışı pozitif korele olmalı."""
+        rng = np.random.default_rng(0)
+        result = sample_correlated_variables(
+            "deposit", "house", n_steps=1, n_paths=200_000, rng=rng
+        )
+        corr = np.corrcoef(
+            np.log(result["salary_growth"]).ravel(),
+            np.log(result["target_price_growth"]).ravel(),
+        )[0, 1]
+        # DEFAULT_INFLATION_RHOS: salary=0.55, house=0.50 -> beklenen ~0.275
+        assert corr == pytest.approx(0.55 * 0.50, abs=0.03)
+
+    def test_run_simulation_still_produces_valid_output(self):
+        """Korelasyonlu örnekleme sonrası run_simulation hâlâ geçerli çıktı üretmeli."""
+        out = run_simulation(
+            initial_savings=300_000.0,
+            initial_monthly_saving=10_000.0,
+            investment_type="gold",
+            target_type="house",
+            target_price=3_000_000.0,
+            n_paths=N_PATHS_SMALL,
+            n_steps=120,
+            seed=5,
+        )
+        assert isinstance(out, SimulationOutput)
         assert 0.0 <= out.never_affordable_pct <= 1.0

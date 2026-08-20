@@ -24,12 +24,7 @@ from numpy.random import Generator
 
 from time_to_afford.affordability.target_price import compute_price_paths
 from time_to_afford.affordability.wealth import compute_wealth_paths
-from time_to_afford.simulation.distributions import (
-    sample_inflation,
-    sample_investment_return,
-    sample_salary_growth,
-    sample_target_price_growth,
-)
+from time_to_afford.simulation.distributions import sample_correlated_variables
 from time_to_afford.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -158,10 +153,13 @@ def run_simulation(
         f"target_price={target_price:,.0f} TL"
     )
 
-    # --- Stokastik değişkenleri örnekle ---
-    investment_factors = sample_investment_return(investment_type, n_steps, n_paths, rng)
-    salary_factors = sample_salary_growth(n_steps, n_paths, rng)
-    price_growth_factors = sample_target_price_growth(target_type, n_steps, n_paths, rng)
+    # --- Stokastik değişkenleri ortak enflasyon faktörüyle ilişkilendirerek örnekle ---
+    # (bkz. distributions.sample_correlated_variables — maaş, konut/araç fiyatı ve
+    # yatırım getirisi artık bağımsız değil, ortak bir enflasyon şokuna göre birlikte hareket eder)
+    correlated = sample_correlated_variables(investment_type, target_type, n_steps, n_paths, rng)
+    investment_factors = correlated["investment_return"]
+    salary_factors = correlated["salary_growth"]
+    price_growth_factors = correlated["target_price_growth"]
 
     # --- W_t ve P_t yollarını hesapla ---
     # wealth_paths[t, i]: path i'de t. aydaki servet

@@ -24,7 +24,6 @@ from typing import Optional
 import numpy as np
 from numpy.random import Generator
 
-
 # =====================================================================
 # 1. Dağılım Parametresi Veri Sınıfları
 # =====================================================================
@@ -342,7 +341,175 @@ def sample_target_price_growth(
 
 
 # =====================================================================
-# 4. Yardımcı: Kümülatif Çarpan -> Zaman Serisi
+# 4. Korelasyonlu (Ortak Faktör) Örnekleme
+# =====================================================================
+
+# Değişkenlerin ortak enflasyon şokuyla (F) korelasyon katsayıları (rho).
+#
+# Tek-faktör modeli:
+#     X_i = rho_i * F + sqrt(1 - rho_i**2) * epsilon_i
+#     epsilon_i ~ iid N(0, 1), değişkenler arası ve F'den bağımsız
+#
+# Bu kurulum Corr(X_i, X_j) = rho_i * rho_j garantisiyle her zaman
+# pozitif yarı tanımlı (geçerli) bir korelasyon yapısı üretir; ayrıca
+# Cholesky ayrıştırması gerektirmez.
+#
+# rho değerleri Türkiye ekonomisine dair genel gözlemlere dayanan KABA
+# varsayımlardır (ör: maaş zamları ve konut/araç fiyatları enflasyonu
+# büyük ölçüde takip eder; BIST enflasyonla daha zayıf/gürültülü
+# ilişkilidir). Gerçek veri kalibrasyonu tamamlanınca yeniden tahmin
+# edilmelidir.
+DEFAULT_INFLATION_RHOS: dict[str, float] = {
+    "salary_growth": 0.55,
+    "house_price": 0.50,
+    "car_price": 0.55,
+    "gold": 0.35,
+    "bist": 0.15,
+    "deposit": 0.60,
+}
+
+
+def sample_common_factor_shocks(
+    variable_rhos: dict[str, float],
+    n_steps: int,
+    n_paths: int,
+    rng: Generator,
+) -> dict[str, np.ndarray]:
+    """Tek ortak faktörlü (enflasyon) modelle korelasyonlu standart normal şoklar üretir.
+
+    Her değişken için X_i = rho_i * F + sqrt(1 - rho_i**2) * epsilon_i
+    hesaplanır; F ortak enflasyon faktörüdür ve ayrıca 'inflation'
+    anahtarıyla döndürülür.
+
+    Parameters
+    ----------
+    variable_rhos : dict of str -> float
+        Değişken adı -> ortak faktörle korelasyonu ([-1, 1] aralığında).
+    n_steps : int
+        Zaman adımı sayısı (ay).
+    n_paths : int
+        Simülasyon path sayısı.
+    rng : numpy.random.Generator
+        Rastgele sayı üreteci.
+
+    Returns
+    -------
+    dict of str -> np.ndarray
+        'inflation' (ortak faktör) ve `variable_rhos` içindeki her
+        değişken için (n_steps, n_paths) boyutunda standart normal
+        (N(0,1)) şoklar.
+
+    Raises
+    ------
+    ValueError
+        Herhangi bir rho [-1, 1] aralığı dışındaysa.
+    """
+    for name, rho in variable_rhos.items():
+        if not (-1.0 <= rho <= 1.0):
+            raise ValueError(f"'{name}' için rho [-1, 1] aralığında olmalıdır, alınan: {rho}")
+
+    common_factor = rng.standard_normal(size=(n_steps, n_paths))
+    shocks: dict[str, np.ndarray] = {"inflation": common_factor}
+
+    for name, rho in variable_rhos.items():
+        idiosyncratic = rng.standard_normal(size=(n_steps, n_paths))
+        shocks[name] = rho * common_factor + np.sqrt(1.0 - rho**2) * idiosyncratic
+
+    return shocks
+
+
+def sample_correlated_variables(
+    investment_type: str,
+    target_type: str,
+    n_steps: int,
+    n_paths: int,
+    rng: Generator,
+    inflation_rhos: Optional[dict[str, float]] = None,
+) -> dict[str, np.ndarray]:
+    """Ortak enflasyon faktörüyle ilişkilendirilmiş simülasyon değişkenlerini örnekler.
+
+    Bağımsız örnekleme yapan `sample_investment_return` / `sample_salary_growth`
+    / `sample_target_price_growth` fonksiyonlarının aksine, bu fonksiyon tüm
+    değişkenleri ortak bir enflasyon şoku üzerinden ilişkilendirir. Böylece
+    örneğin yüksek enflasyon senaryolarında maaş artışının ve konut/araç
+    fiyat artışının da (gerçekçi biçimde) birlikte yüksek çıkması sağlanır.
+
+    Her değişkenin marjinal dağılımı (mu, sigma) bağımsız örnekleme ile
+    birebir aynı kalır; değişen yalnızca değişkenler arasındaki korelasyondur.
+
+    Parameters
+    ----------
+    investment_type : str
+        'gold', 'bist' veya 'deposit'.
+    target_type : str
+        'house' veya 'car'.
+    n_steps : int
+        Zaman adımı sayısı (ay).
+    n_paths : int
+        Simülasyon path sayısı.
+    rng : numpy.random.Generator
+        Rastgele sayı üreteci.
+    inflation_rhos : dict of str -> float, optional
+        Her değişkenin ortak enflasyon faktörüyle korelasyonu.
+        None ise DEFAULT_INFLATION_RHOS kullanılır.
+
+    Returns
+    -------
+    dict of str -> np.ndarray
+        'inflation', 'salary_growth', 'investment_return',
+        'target_price_growth' anahtarlarıyla (n_steps, n_paths)
+        boyutunda aylık çarpan array'leri.
+
+    Raises
+    ------
+    ValueError
+        Bilinmeyen investment_type veya target_type girilirse.
+    """
+    rhos = inflation_rhos if inflation_rhos is not None else DEFAULT_INFLATION_RHOS
+
+    inv = investment_type.lower().strip()
+    if inv not in ("gold", "bist", "deposit"):
+        raise ValueError(
+            f"Bilinmeyen yatırım türü: '{investment_type}'. "
+            "Desteklenenler: 'gold', 'bist', 'deposit'."
+        )
+
+    tt = target_type.lower().strip()
+    if tt not in ("house", "car"):
+        raise ValueError(
+            f"Bilinmeyen hedef türü: '{target_type}'. "
+            "Desteklenenler: 'house', 'car'."
+        )
+
+    shocks = sample_common_factor_shocks(rhos, n_steps, n_paths, rng)
+
+    inflation_factors = np.exp(INFLATION_PARAMS.mu + INFLATION_PARAMS.sigma * shocks["inflation"])
+    salary_factors = np.exp(
+        SALARY_GROWTH_PARAMS.mu + SALARY_GROWTH_PARAMS.sigma * shocks["salary_growth"]
+    )
+
+    price_params = HOUSE_PRICE_PARAMS if tt == "house" else CAR_PRICE_PARAMS
+    price_shock = shocks["house_price"] if tt == "house" else shocks["car_price"]
+    price_growth_factors = np.exp(price_params.mu + price_params.sigma * price_shock)
+
+    if inv == "gold":
+        investment_factors = np.exp(GOLD_PARAMS.mu + GOLD_PARAMS.sigma * shocks["gold"])
+    elif inv == "bist":
+        investment_factors = np.exp(BIST_PARAMS.mu + BIST_PARAMS.sigma * shocks["bist"])
+    else:  # deposit
+        raw = DEPOSIT_PARAMS.mu + DEPOSIT_PARAMS.sigma * shocks["deposit"]
+        investment_factors = 1.0 + np.clip(raw, a_min=-0.005, a_max=None)
+
+    return {
+        "inflation": inflation_factors,
+        "salary_growth": salary_factors,
+        "investment_return": investment_factors,
+        "target_price_growth": price_growth_factors,
+    }
+
+
+# =====================================================================
+# 5. Yardımcı: Kümülatif Çarpan -> Zaman Serisi
 # =====================================================================
 
 

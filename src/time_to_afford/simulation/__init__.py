@@ -1,23 +1,26 @@
 """Time to Afford — Simulation modülü."""
 
 from time_to_afford.simulation.distributions import (
+    DEFAULT_INFLATION_RHOS,
     LogNormalParams,
     NormalParams,
-    sample_investment_return,
+    cumulative_product,
+    sample_common_factor_shocks,
+    sample_correlated_variables,
     sample_inflation,
+    sample_investment_return,
     sample_salary_growth,
     sample_target_price_growth,
-    cumulative_product,
 )
 from time_to_afford.simulation.monte_carlo import SimulationOutput, run_simulation
 from time_to_afford.simulation.scenarios import (
-    ScenarioParams,
     BASELINE,
     OPTIMISTIC,
     PESSIMISTIC,
     PRESETS,
-    run_scenario,
+    ScenarioParams,
     get_preset,
+    run_scenario,
 )
 
 __all__ = [
@@ -27,6 +30,9 @@ __all__ = [
     "sample_inflation",
     "sample_salary_growth",
     "sample_target_price_growth",
+    "sample_common_factor_shocks",
+    "sample_correlated_variables",
+    "DEFAULT_INFLATION_RHOS",
     "cumulative_product",
     "SimulationOutput",
     "run_simulation",
