@@ -16,7 +16,7 @@ if str(src_path) not in sys.path:
 from time_to_afford.affordability.time_to_afford import summarize_simulation
 from time_to_afford.config.settings import get_settings
 from time_to_afford.models.schemas import InvestmentType, TargetType
-from time_to_afford.simulation.monte_carlo import run_simulation
+from time_to_afford.simulation.scenarios import PRESETS, get_preset, run_scenario
 
 # ── Sayfa yapılandırması ─────────────────────────────────────────────
 st.set_page_config(
@@ -74,11 +74,6 @@ with st.form("user_input_form"):
 
     with col1:
         st.subheader("Mevcut Durumunuz")
-        profession = st.text_input(
-            "Mesleğiniz",
-            placeholder="Örn: Yazılım Mühendisi",
-            help="Gelir artışınız bu meslek profiline göre tahmin edilecektir.",
-        )
         initial_savings = st.number_input(
             "Mevcut Birikim (TL)",
             min_value=0.0,
@@ -117,6 +112,17 @@ with st.form("user_input_form"):
 
         st.markdown("---")
         st.markdown("**Simülasyon Ayarları**")
+        scenario_key = st.selectbox(
+            "Ekonomik Senaryo",
+            options=list(PRESETS.keys()),
+            index=0,
+            format_func=lambda k: PRESETS[k].name,
+            help=(
+                "Farklı enflasyon/getiri varsayımları altında sonucu görün. "
+                "Temel = tarihsel kaba kalibrasyon, İyimser/Kötümser = alternatif "
+                "ekonomik koşullar."
+            ),
+        )
         n_paths = st.select_slider(
             "Senaryo Sayısı",
             options=[1_000, 2_000, 5_000, 10_000],
@@ -139,10 +145,6 @@ with st.form("user_input_form"):
 
 # ── Simülasyon & Sonuçlar ─────────────────────────────────────────────
 if submitted:
-    if not profession.strip():
-        st.error("⚠️ Lütfen mesleğinizi giriniz.")
-        st.stop()
-
     if target_price <= 0:
         st.error("⚠️ Hedef varlık fiyatı sıfırdan büyük olmalıdır.")
         st.stop()
@@ -150,8 +152,10 @@ if submitted:
     with st.spinner("Monte Carlo simülasyonu çalışıyor…"):
         settings = get_settings()
         n_steps = horizon_years * 12
+        scenario = get_preset(scenario_key)
 
-        sim_output = run_simulation(
+        sim_output = run_scenario(
+            scenario,
             initial_savings=initial_savings,
             initial_monthly_saving=monthly_saving,
             investment_type=investment_type,
@@ -175,14 +179,14 @@ if submitted:
     st.divider()
     st.header("📊 Simülasyon Sonuçları")
     st.caption(
-        f"Meslek: **{profession}** · "
+        f"Senaryo: **{scenario.name}** · "
         f"Hedef: **{TARGET_LABELS[target_type]} — {format_tl(target_price)}** · "
         f"Yatırım: **{INVESTMENT_LABELS[investment_type]}** · "
         f"{n_paths:,} senaryo · {horizon_years} yıl ufuk"
     )
 
-    # ── 3 Senaryo Metrik Kartları ─────────────────────────────────────
-    st.subheader("🎯 Ne Zaman Satın Alabilirsiniz?")
+    # ── 3 Olasılık Dilimi Metrik Kartları ─────────────────────────────
+    st.subheader(f"🎯 '{scenario.name}' Senaryosunda Ne Zaman Satın Alabilirsiniz?")
     c1, c2, c3 = st.columns(3)
 
     with c1:
@@ -190,9 +194,9 @@ if submitted:
             result.optimistic_time.years, result.optimistic_time.months
         )
         st.metric(
-            label="✅ İyimser Senaryo (P10)",
+            label="✅ En İyi %10 İhtimal (P10)",
             value=label,
-            help="Senaryoların en iyi %10'unda ulaşılan süre.",
+            help="Seçili senaryo içindeki 10.000 yol arasında en hızlı %10'unda ulaşılan süre.",
         )
 
     with c2:
@@ -200,9 +204,9 @@ if submitted:
             result.median_time.years, result.median_time.months
         )
         st.metric(
-            label="📍 Temel Senaryo (P50 — Medyan)",
+            label="📍 Medyan Sonuç (P50)",
             value=label,
-            help="Senaryoların yarısında ulaşılan süre.",
+            help="Seçili senaryo içindeki yolların yarısında ulaşılan süre.",
         )
 
     with c3:
@@ -210,9 +214,9 @@ if submitted:
             result.pessimistic_time.years, result.pessimistic_time.months
         )
         st.metric(
-            label="⚠️ Kötümser Senaryo (P90)",
+            label="⚠️ En Kötü %10 İhtimal (P90)",
             value=label,
-            help="Senaryoların en kötü %10'unda bile ulaşılan süre.",
+            help="Seçili senaryo içindeki yolların en kötü %10'unda bile ulaşılan süre.",
         )
 
     # ── Olasılık Çubuğu ──────────────────────────────────────────────
