@@ -12,7 +12,7 @@ Bu doküman, **Time to Afford** projesinde zaman serisi tahminleme (forecasting)
 | **Konut Fiyat Endeksi (KFE)** | TCMB | EVDS: `TP.KFE.TR` | Aylık | ✅ Doğrulandı | Evet |
 | **Mevduat Faizi (3 Ay Vadeli)** | TCMB | EVDS: `TP.TRY.MT02` | Haftalık $\to$ Aylık | ✅ Doğrulandı | Evet |
 | **Döviz Kuru (USD/TRY)** | TCMB | EVDS: `TP.DK.USD.A.YTL` | Günlük $\to$ Aylık | ✅ Doğrulandı | Evet |
-| **Politika Faizi (1H Repo)** | TCMB | EVDS: `TP.KT.IFJ01` | Günlük $\to$ Aylık | ✅ Doğrulandı | Evet |
+| **Politika Faizi (Fonlama Maliyeti)** | TCMB | EVDS: `TP.APIFON4` | Günlük $\to$ Aylık | ✅ Doğrulandı (Ağustos 2026) | Evet |
 | **BIST 100 Endeksi** | Dış Sağlayıcı (Yahoo Fin.) | `XU100.IS` | Günlük $\to$ Aylık | ✅ Doğrulandı (Dış Sağlayıcı) | Hayır (3. Parti Proxy) |
 | **Sentetik Gram Altın** | Sentetik Hesaplama | `synthetic_gram_gold_try` | Günlük $\to$ Aylık | ✅ Matematiksel Proxy | Kısmen (TCMB Kur + Ons) |
 | **Taşıt Fiyat Göstergesi** | TÜİK | `vehicle_price_proxy` (Ulaştırma TÜFE) | Aylık | ⚠️ Proxy Olarak Doğrulandı | Evet (Ama Araç Fiyatı Değil) |
@@ -27,7 +27,7 @@ Bu doküman, **Time to Afford** projesinde zaman serisi tahminleme (forecasting)
 * **Konut Fiyat Endeksi (KFE):** `TP.KFE.TR` Türkiye geneli hedonik konut fiyat endeksidir. 2010 yılından itibaren aylık olarak mevcuttur. Yaklaşık 45-50 gün gecikmeyle yayımlanır.
 * **Mevduat Faizi:** `TP.TRY.MT02` (3 aya kadar vadeli TL mevduat ağırlıklı ortalama faiz oranı). Haftalık akım veri olup aylık ortalaması alınarak kullanılır.
 * **Döviz Kuru:** `TP.DK.USD.A.YTL` TCMB gösterge niteliğindeki döviz alış kurudur.
-* **Politika Faizi:** `TP.KT.IFJ01` (TCMB 1 Hafta Vadeli Repo İhale Faiz Oranı).
+* **Politika Faizi:** `TP.APIFON4` (TCMB Ağırlıklı Ortalama Fonlama Maliyeti). EVDS'de tek bir "resmi ilan edilen politika faizi" serisi bulunmuyor; bu seri TCMB'nin fiilen uyguladığı ortalama fonlama maliyetini yansıtır ve yaygın olarak politika faizi proxy'si olarak kullanılır. (Daha önce bu depoda `TP.KT.IFJ01` olarak belgelenmişti; bu kod evds3 API'sinde HTTP 400 ile reddediliyor — kaldırılmış veya yanlış belgelenmiş olabilir. `TP.APIFON4`, Ocak-Mart 2024 için gerçek veriyle doğrulandı: %42.50 → %45.00, TCMB'nin 25 Ocak 2024 faiz kararıyla birebir örtüşüyor.)
 
 ### 2.2. Faiz $\to$ Aylık Getiri Dönüşümü ve Sınırlılıkları
 * **Dönüşüm Formülü (Basitleştirilmiş Varsayım):**
@@ -88,7 +88,7 @@ Aşağıdaki tablo, `data/processed/macro_monthly.parquet` veri kümesinde bulun
 | `house_price_index` | TCMB EVDS | `TP.KFE.TR` | Monthly | Index (2023=100) | 2010-01-01 | Monthly | Yes | Level & Log-return | ~45 gün gecikmeli; 2010 öncesi yok |
 | `deposit_rate_3m` | TCMB EVDS | `TP.TRY.MT02` | Weekly $\to$ Monthly | % (Annual) | 2002-01-01 | Monthly (Avg) | Yes | Level & Simplified effective monthly rate | Brüt piyasa ortalamasıdır; stopaj ve bireysel makasları içermez |
 | `usd_try` | TCMB EVDS | `TP.DK.USD.A.YTL` | Daily $\to$ Monthly | TRY / USD | 2000-01-01 | Monthly (Close) | Yes | Month-end close & Log-return | Gösterge kurdur; serbest piyasa makasını içermez |
-| `policy_rate` | TCMB EVDS | `TP.KT.IFJ01` | Daily $\to$ Monthly | % (Annual) | 2010-05-01 | Monthly (Avg) | Yes | Level | 1 Hafta Repo faizidir |
+| `policy_rate` | TCMB EVDS | `TP.APIFON4` | Daily $\to$ Monthly | % (Annual) | 2010-05-01 | Monthly (Avg) | Yes | Level | Ağırlıklı ortalama fonlama maliyetidir (tek bir resmi "politika faizi" serisi EVDS'de yok) |
 | `bist100_close` | Yahoo Finance (External) | `XU100.IS` | Daily $\to$ Monthly | Index Pts | 2000-01-01 | Monthly (Close) | No (3rd Party) | Month-end close & Log-return | Analitik amaçlı üçüncü parti veridir |
 | `synthetic_gram_gold_try` | Synthetic (`GC=F` $\times$ `USDTRY`) | Internal Formula | Daily $\to$ Monthly | TRY / Gram | 2005-01-01 | Monthly (Close) | Partial | Month-end close & Log-return | Fiziki piyasa prim ve makaslarını içermez |
 | `vehicle_price_proxy` | TÜİK (TÜFE Ulaştırma) | TÜİK Harcama Grubu | Monthly | Index | 2003-01-01 | Monthly | Yes | Level & Log-return | Araç satış fiyatı değil, TÜFE alt bileşenidir |

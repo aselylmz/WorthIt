@@ -18,16 +18,32 @@ Kaynak kodları için bkz. docs/data_sources.md.
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
-from typing import Dict
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from time_to_afford.data.loaders import EVDSClient, YahooFinanceLoader, save_raw_snapshot
+from time_to_afford.data.loaders import (
+    DataFormatError,
+    EVDSClient,
+    YahooFinanceLoader,
+    save_raw_snapshot,
+)
 from time_to_afford.data.preprocessing import run_data_pipeline
 from time_to_afford.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# EVDS API, tek istekte döndürdüğü satır sayısını sessizce (hata vermeden)
+# ~1000 ile sınırlıyor: uzun tarih aralığı istenen günlük/haftalık frekanslı
+# serilerde en eski gözlemler kırpılıp yalnızca en güncel ~1000 satır
+# döner. Bu, yüksek frekanslı serilerin (günlük/haftalık) tarih aralığının
+# parçalara bölünerek (chunked) çekilmesini gerektirir. Aylık seriler
+# (16 yılda ~200 satır) bu sınırı hiçbir zaman aşmaz.
+EVDS_CHUNK_DAYS = 650
+
+# Chunked çekilmesi gereken (günlük veya haftalık frekanslı) dataset anahtarları.
+_HIGH_FREQUENCY_DATASETS = {"usd_try", "policy_rate", "deposit_rate_3m"}
 
 # =====================================================================
 # Seri Kayıt Defteri (bkz. docs/data_sources.md)
@@ -41,9 +57,18 @@ EVDS_LEVEL_SERIES: Dict[str, str] = {
 }
 
 # Faiz oranı serileri: ayın aritmetik ortalamasıyla aylıklaştırılır
+#
+# NOT: docs/data_sources.md'de "TP.KT.IFJ01" olarak belgelenen politika
+# faizi kodu, gerçek EVDS API'sinde (evds3, Ağustos 2026) HTTP 400 ile
+# reddediliyor — kod ya kaldırılmış ya da yanlış belgelenmiş. EVDS'de
+# tek bir "resmi ilan edilen politika faizi" serisi bulunmuyor; bunun
+# yerine TCMB'nin fiilen uyguladığı ortalama fonlama maliyeti kullanılır.
+# TP.APIFON4 (Ağırlıklı Ortalama Fonlama Maliyeti) gerçek veriyle
+# doğrulandı: Ocak-Mart 2024 için %42.50 -> %45.00 gösteriyor, bu da
+# TCMB'nin 25 Ocak 2024 faiz kararıyla birebir örtüşüyor.
 EVDS_RATE_SERIES: Dict[str, str] = {
     "deposit_rate_3m": "TP.TRY.MT02",
-    "policy_rate": "TP.KT.IFJ01",
+    "policy_rate": "TP.APIFON4",
 }
 
 # NOT: Bu kod DOĞRULANMAMIŞTIR. docs/data_sources.md § 2.5'te belirtildiği
@@ -68,30 +93,65 @@ DEFAULT_START = "2010-01-01"
 # =====================================================================
 
 
-def _fetch_evds_level_series(
-    client: EVDSClient, dataset_key: str, series_code: str, start: str, end: str
-) -> pd.DataFrame:
-    """EVDS'ten bir seviye serisi çeker, raw snapshot kaydeder ve raw DataFrame döner."""
-    df = client.fetch_series(
-        series_code,
-        start_date=start,
-        end_date=end,
-    )
-    column = series_code.replace(".", "_")
-    save_raw_snapshot(df, source="evds", series_name=dataset_key)
-    return df[[column]].rename(columns={column: "value"})
+def _date_chunks(start: date, end: date, chunk_days: int) -> List[Tuple[date, date]]:
+    """[start, end] aralığını chunk_days boyutunda ardışık, çakışmayan parçalara böler."""
+    chunks: List[Tuple[date, date]] = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + timedelta(days=chunk_days), end)
+        chunks.append((cur, chunk_end))
+        cur = chunk_end + timedelta(days=1)
+    return chunks
 
 
-def _fetch_evds_rate_series(
-    client: EVDSClient, dataset_key: str, series_code: str, start: str, end: str
+def _fetch_evds_series(
+    client: EVDSClient,
+    dataset_key: str,
+    series_code: str,
+    start: date,
+    end: date,
+    chunked: bool,
 ) -> pd.DataFrame:
-    """EVDS'ten bir faiz oranı serisi çeker, raw snapshot kaydeder ve raw DataFrame döner."""
-    df = client.fetch_series(
-        series_code,
-        start_date=start,
-        end_date=end,
-    )
+    """EVDS'ten bir seriyi çeker, raw snapshot kaydeder ve raw DataFrame döner.
+
+    `chunked=True` olduğunda tarih aralığı EVDS_CHUNK_DAYS boyutunda
+    parçalara bölünerek çekilir (bkz. EVDS_CHUNK_DAYS yorumu — API'nin
+    sessiz ~1000 satır sınırını aşmak için).
+
+    Parameters
+    ----------
+    chunked : bool
+        True ise günlük/haftalık frekanslı seriler için tarih aralığı
+        parçalanır. Aylık seriler için False yeterlidir (tek istek).
+    """
     column = series_code.replace(".", "_")
+    date_ranges = _date_chunks(start, end, EVDS_CHUNK_DAYS) if chunked else [(start, end)]
+
+    parts: List[pd.DataFrame] = []
+    for chunk_start, chunk_end in date_ranges:
+        try:
+            df_chunk = client.fetch_series(
+                series_code,
+                start_date=chunk_start.strftime("%d-%m-%Y"),
+                end_date=chunk_end.strftime("%d-%m-%Y"),
+            )
+            parts.append(df_chunk)
+        except DataFormatError:
+            # Serinin gerçek başlangıcından önceki boş parçalar (ör. seri
+            # istenen aralığın bir kısmında henüz mevcut değilse) — atla.
+            logger.info(
+                f"{dataset_key}: {chunk_start}–{chunk_end} aralığında veri yok, atlanıyor."
+            )
+            continue
+
+    if not parts:
+        raise DataFormatError(
+            f"{dataset_key} ({series_code}) için hiçbir tarih parçasında veri bulunamadı."
+        )
+
+    df = pd.concat(parts)
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+
     save_raw_snapshot(df, source="evds", series_name=dataset_key)
     return df[[column]].rename(columns={column: "value"})
 
@@ -128,22 +188,18 @@ def fetch_all_raw_series(start_iso: str, end_iso: str) -> Dict[str, pd.DataFrame
     """
     start_date = date.fromisoformat(start_iso)
     end_date = date.fromisoformat(end_iso)
-    evds_start = start_date.strftime("%d-%m-%Y")
-    evds_end = end_date.strftime("%d-%m-%Y")
 
     raw_series: Dict[str, pd.DataFrame] = {}
 
     evds_client = EVDSClient()
-    for dataset_key, series_code in EVDS_LEVEL_SERIES.items():
-        logger.info(f"EVDS seviye serisi çekiliyor: {dataset_key} ({series_code})")
-        raw_series[dataset_key] = _fetch_evds_level_series(
-            evds_client, dataset_key, series_code, evds_start, evds_end
+    for dataset_key, series_code in {**EVDS_LEVEL_SERIES, **EVDS_RATE_SERIES}.items():
+        chunked = dataset_key in _HIGH_FREQUENCY_DATASETS
+        logger.info(
+            f"EVDS serisi çekiliyor: {dataset_key} ({series_code})"
+            + (" [parçalı]" if chunked else "")
         )
-
-    for dataset_key, series_code in EVDS_RATE_SERIES.items():
-        logger.info(f"EVDS faiz serisi çekiliyor: {dataset_key} ({series_code})")
-        raw_series[dataset_key] = _fetch_evds_rate_series(
-            evds_client, dataset_key, series_code, evds_start, evds_end
+        raw_series[dataset_key] = _fetch_evds_series(
+            evds_client, dataset_key, series_code, start_date, end_date, chunked=chunked
         )
 
     yahoo_loader = YahooFinanceLoader()
