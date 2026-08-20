@@ -565,8 +565,8 @@ class TestRunSimulationUsesCorrelation:
             np.log(result["salary_growth"]).ravel(),
             np.log(result["target_price_growth"]).ravel(),
         )[0, 1]
-        # DEFAULT_INFLATION_RHOS: salary=0.55, house=0.50 -> beklenen ~0.275
-        assert corr == pytest.approx(0.55 * 0.50, abs=0.03)
+        expected = DEFAULT_INFLATION_RHOS["salary_growth"] * DEFAULT_INFLATION_RHOS["house_price"]
+        assert corr == pytest.approx(expected, abs=0.03)
 
     def test_run_simulation_still_produces_valid_output(self):
         """Korelasyonlu örnekleme sonrası run_simulation hâlâ geçerli çıktı üretmeli."""

@@ -71,12 +71,13 @@ EVDS_RATE_SERIES: Dict[str, str] = {
     "policy_rate": "TP.APIFON4",
 }
 
-# NOT: Bu kod DOĞRULANMAMIŞTIR. docs/data_sources.md § 2.5'te belirtildiği
-# gibi TÜİK'in TÜFE Ulaştırma alt grubuna karşılık gelen resmi bir EVDS
-# seri kodu bu depoda henüz teyit edilmedi. Çalıştırmadan önce
-# https://evds2.tcmb.gov.tr adresindeki Veri Kataloğu > TÜFE Alt Grupları
-# bölümünden "Ulaştırma" grubunun güncel seri kodunu doğrulayın ve
-# gerekirse aşağıdaki değeri güncelleyin.
+# NOT: Bu kod YANLIŞ/GÜVENİLMEZ olduğu doğrulandı (bkz. docs/data_sources.md
+# § 2.5). "TP.TUFE1YI" ön eki TÜFE alt grupları değil, Yİ-ÜFE (üretici
+# fiyat endeksi) ailesine ait — sonuç seride ekonomik olarak anlamsız
+# aylık sıçramalar var (ör. -%49 / +%41). scripts/calibrate_distributions.py
+# bu seriyi kasıtlı olarak dışlıyor. Çalıştırmadan önce
+# https://evds3.tcmb.gov.tr adresindeki Veri Kataloğu > TÜFE Alt Grupları
+# bölümünden "Ulaştırma" grubunun doğru seri kodunu bulup güncelleyin.
 EVDS_LEVEL_SERIES["vehicle_price_proxy"] = "TP.TUFE1YI.T7"
 
 # dataset anahtarı -> Yahoo Finance sembolü (bkz. docs/data_sources.md § 2.3, 2.4)

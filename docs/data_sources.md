@@ -15,7 +15,7 @@ Bu doküman, **Time to Afford** projesinde zaman serisi tahminleme (forecasting)
 | **Politika Faizi (Fonlama Maliyeti)** | TCMB | EVDS: `TP.APIFON4` | Günlük $\to$ Aylık | ✅ Doğrulandı (Ağustos 2026) | Evet |
 | **BIST 100 Endeksi** | Dış Sağlayıcı (Yahoo Fin.) | `XU100.IS` | Günlük $\to$ Aylık | ✅ Doğrulandı (Dış Sağlayıcı) | Hayır (3. Parti Proxy) |
 | **Sentetik Gram Altın** | Sentetik Hesaplama | `synthetic_gram_gold_try` | Günlük $\to$ Aylık | ✅ Matematiksel Proxy | Kısmen (TCMB Kur + Ons) |
-| **Taşıt Fiyat Göstergesi** | TÜİK | `vehicle_price_proxy` (Ulaştırma TÜFE) | Aylık | ⚠️ Proxy Olarak Doğrulandı | Evet (Ama Araç Fiyatı Değil) |
+| **Taşıt Fiyat Göstergesi** | TÜİK | `vehicle_price_proxy` (kod: `TP.TUFE1YI.T7`) | Aylık | ❌ Yanlış Kod (bkz. § 2.5) | Hayır (Yanlış Seri Ailesi) |
 | **Parametrik Gelir Modeli** | Parametrik Büyüme Modeli | `salary_growth_rate` | Aylık Simülasyon | ⚠️ Varsayımsal Model | Hayır (Kalibrasyon Bekliyor) |
 
 ---
@@ -52,6 +52,7 @@ Bu doküman, **Time to Afford** projesinde zaman serisi tahminleme (forecasting)
   * Indicata ve Cardata gibi özel veri tabanları ticari lisansa tabidir.
   * BETAM *sahibindex* raporları akademik PDF formatındadır, doğrudan API sağlamaz.
 * **MVP Yaklaşımı:** Kullanıcı başlangıç hedef araç fiyatını ($P_0$) kendisi girer. Gelecekteki fiyat artışı ($P_t$) için TÜİK Ulaştırma harcama grubu alt kalemi doğrudan otomobil fiyatı olarak adlandırılmayacak, **`vehicle_price_proxy`** olarak kompozit bir artış oranı referansı olarak kullanılacaktır.
+* **⚠️ Güncelleme (Ağustos 2026):** Depoda `vehicle_price_proxy` için kullanılan EVDS kodu `TP.TUFE1YI.T7`, gerçek veriyle test edildiğinde **TÜFE Ulaştırma alt grubu DEĞİL** olduğu ortaya çıktı — `TUFE1YI` ön eki aslında Yİ-ÜFE (Yurt İçi Üretici Fiyat Endeksi) seri ailesine ait. Sonuç: seri, bir tüketici fiyat endeksinde asla görülmeyecek ekonomik olarak anlamsız aylık sıçramalar içeriyor (ör. 2020-05: %-49.5, 2020-07: %+41.1). Bu seri **kalibrasyona dahil edilmedi** (bkz. `scripts/calibrate_distributions.py`); `CAR_PRICE_PARAMS` hâlâ kaba varsayım olarak kalıyor. Doğru TÜFE Ulaştırma alt grubu kodu, EVDS Veri Kataloğu'ndan (evds3.tcmb.gov.tr) manuel olarak teyit edilmeden bu seri kullanılmamalıdır.
 
 ### 2.6. Nominal Gelir Büyüme Modeli (Parametrik Gelir Varsayımı)
 * **Model Tanımı:** Bu aşamada gerçek bir bireysel maaş tahmini yerine, aylık frekansta çalışan parametrik bir **nominal gelir büyüme modeli (nominal salary growth model)** kullanılır:
@@ -91,5 +92,5 @@ Aşağıdaki tablo, `data/processed/macro_monthly.parquet` veri kümesinde bulun
 | `policy_rate` | TCMB EVDS | `TP.APIFON4` | Daily $\to$ Monthly | % (Annual) | 2010-05-01 | Monthly (Avg) | Yes | Level | Ağırlıklı ortalama fonlama maliyetidir (tek bir resmi "politika faizi" serisi EVDS'de yok) |
 | `bist100_close` | Yahoo Finance (External) | `XU100.IS` | Daily $\to$ Monthly | Index Pts | 2000-01-01 | Monthly (Close) | No (3rd Party) | Month-end close & Log-return | Analitik amaçlı üçüncü parti veridir |
 | `synthetic_gram_gold_try` | Synthetic (`GC=F` $\times$ `USDTRY`) | Internal Formula | Daily $\to$ Monthly | TRY / Gram | 2005-01-01 | Monthly (Close) | Partial | Month-end close & Log-return | Fiziki piyasa prim ve makaslarını içermez |
-| `vehicle_price_proxy` | TÜİK (TÜFE Ulaştırma) | TÜİK Harcama Grubu | Monthly | Index | 2003-01-01 | Monthly | Yes | Level & Log-return | Araç satış fiyatı değil, TÜFE alt bileşenidir |
+| `vehicle_price_proxy` | ❌ Yanlış kod (`TP.TUFE1YI.T7` = Yİ-ÜFE ailesi) | TÜİK Harcama Grubu (teyit edilecek) | Monthly | Index | 2003-01-01 | Monthly | No | Level & Log-return | Kalibrasyona dahil edilmedi; doğru EVDS kodu bulunana kadar kullanılmamalı |
 | `salary_growth_rate` | Parametric Formula | $g_{salary} = \pi + \alpha + \epsilon$ | Monthly | % (Monthly) | Simulated | Per Simulation | No | Stochastic simulation | Parametrik varsayımdır; kesikli zam rejimlerini içermez |

@@ -11,9 +11,20 @@ Fiyat serileri aylık yüzde değişim olarak döndürülür.
 
 Parametreler hakkında not
 --------------------------
-Parametreler, 2018-2024 dönemi Türkiye verisine (TÜFE, BIST-100,
-altın/TL, mevduat faizi) dayalı kaba kalibrasyondur.
-Gerçek verilerle yeniden kalibre edilmeleri tavsiye edilir.
+INFLATION_PARAMS, HOUSE_PRICE_PARAMS, GOLD_PARAMS, BIST_PARAMS ve
+DEPOSIT_PARAMS, `data/processed/macro_monthly.parquet`teki gerçek TCMB
+EVDS / Yahoo Finance verisinden `scripts/calibrate_distributions.py` ile
+hesaplanmıştır (kalibrasyon penceresi: 2019-01 – 2026-01, 85 ay).
+
+SALARY_GROWTH_PARAMS ve CAR_PRICE_PARAMS HÂLÂ KABA VARSAYIMDIR:
+  - Gerçek bireysel maaş verisi mevcut değil (bkz. docs/data_sources.md § 2.6).
+  - `vehicle_price_proxy` serisi (TP.TUFE1YI.T7) araştırma sonucu TÜFE
+    Ulaştırma alt grubu DEĞİL, Yİ-ÜFE (üretici fiyat endeksi) ailesine ait
+    olduğu ve ekonomik olarak anlamsız aylık sıçramalar (-%49 / +%41 gibi)
+    içerdiği tespit edildi; kalibrasyona dahil edilmedi (bkz. § 2.5).
+
+Yeni veri çekildikçe `python scripts/calibrate_distributions.py` ile
+yeniden kalibre edin.
 """
 
 from __future__ import annotations
@@ -79,46 +90,50 @@ class NormalParams:
 # =====================================================================
 
 # Aylık TÜFE değişimi (log-normal).
-# 2018-2024 ortalaması ~%3.5/ay; sigma yüksek çünkü Türkiye enflasyonu oynak.
+# Kalibrasyon: cpi_return, 2019-01 -> 2026-01 (n=85 ay).
 INFLATION_PARAMS = LogNormalParams(
-    mu=0.030,    # aylık log-ort (~%3.0)
-    sigma=0.015,
+    mu=0.0263,
+    sigma=0.0229,
 )
 
 # BIST-100 aylık log-getiri (normal).
-# 2018-2024 aylık medyan log-getiri yaklaşık %2.5, volatilite yüksek.
+# Kalibrasyon: bist100_return, 2019-01 -> 2026-01 (n=85 ay).
 BIST_PARAMS = NormalParams(
-    mu=0.025,    # aylık ort. log-getiri
-    sigma=0.070, # aylık log-getiri std
+    mu=0.0320,
+    sigma=0.0840,
 )
 
 # Altın (TL bazlı) aylık log-getiri (normal).
-# Dolar altını + kur etkisiyle TL bazında yüksek getiri ve yüksek oynaklık.
+# Kalibrasyon: gold_return (sentetik gram altın), 2019-01 -> 2026-01 (n=85 ay).
 GOLD_PARAMS = NormalParams(
-    mu=0.030,    # aylık ort. log-getiri
-    sigma=0.055, # aylık log-getiri std
+    mu=0.0402,
+    sigma=0.0572,
 )
 
-# Mevduat aylık faiz oranı (normal, dar bant).
-# Yıllık ~%40 faiz → aylık ~%2.8; dar volatilite çünkü düzenlenmiş faiz.
+# Mevduat aylık efektif getiri (normal, dar bant).
+# Kalibrasyon: deposit_monthly_return, 2019-01 -> 2026-01 (n=85 ay).
 DEPOSIT_PARAMS = NormalParams(
-    mu=0.028,    # aylık ort. getiri
-    sigma=0.005, # dar bant
+    mu=0.0218,
+    sigma=0.0115,
 )
 
 # Maaş artışı (aylık log-normal).
+# KABA VARSAYIM — gerçek maaş verisi yok, kalibre edilmedi (bkz. modül docstring'i).
 SALARY_GROWTH_PARAMS = LogNormalParams(
     mu=0.018,
     sigma=0.012,
 )
 
 # Konut fiyat artışı (aylık log-normal).
+# Kalibrasyon: house_price_return, 2019-01 -> 2026-01 (n=85 ay).
 HOUSE_PRICE_PARAMS = LogNormalParams(
-    mu=0.032,
-    sigma=0.020,
+    mu=0.0346,
+    sigma=0.0301,
 )
 
 # Araç fiyat artışı (aylık log-normal).
+# KABA VARSAYIM — vehicle_price_proxy (TP.TUFE1YI.T7) güvenilmez bulundu,
+# kalibre edilmedi (bkz. modül docstring'i).
 CAR_PRICE_PARAMS = LogNormalParams(
     mu=0.028,
     sigma=0.018,
@@ -354,18 +369,24 @@ def sample_target_price_growth(
 # pozitif yarı tanımlı (geçerli) bir korelasyon yapısı üretir; ayrıca
 # Cholesky ayrıştırması gerektirmez.
 #
-# rho değerleri Türkiye ekonomisine dair genel gözlemlere dayanan KABA
-# varsayımlardır (ör: maaş zamları ve konut/araç fiyatları enflasyonu
-# büyük ölçüde takip eder; BIST enflasyonla daha zayıf/gürültülü
-# ilişkilidir). Gerçek veri kalibrasyonu tamamlanınca yeniden tahmin
-# edilmelidir.
+# house_price, gold, bist, deposit: gerçek corr(cpi_return, X_return)
+# değerleridir — `scripts/calibrate_distributions.py` ile
+# `data/processed/macro_monthly.parquet`ten hesaplandı (2019-01 -> 2026-01,
+# n=85 ay). Dikkat çekici bulgu: altının enflasyonla korelasyonu
+# (varsayılan 0.35 yerine) neredeyse sıfır; konutun korelasyonu ise
+# (varsayılan 0.50 yerine) çok daha güçlü çıktı.
+#
+# salary_growth, car_price: KABA VARSAYIM olarak kaldı — gerçek maaş verisi
+# yok, vehicle_price_proxy serisi de güvenilmez bulundu (bkz. modül
+# docstring'i ve distributions.py'deki SALARY_GROWTH_PARAMS/CAR_PRICE_PARAMS
+# yorumları).
 DEFAULT_INFLATION_RHOS: dict[str, float] = {
-    "salary_growth": 0.55,
-    "house_price": 0.50,
-    "car_price": 0.55,
-    "gold": 0.35,
-    "bist": 0.15,
-    "deposit": 0.60,
+    "salary_growth": 0.55,   # KABA VARSAYIM
+    "house_price": 0.698,
+    "car_price": 0.55,       # KABA VARSAYIM
+    "gold": 0.073,
+    "bist": 0.216,
+    "deposit": 0.142,
 }
 
 
